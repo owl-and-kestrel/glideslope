@@ -4,6 +4,10 @@
   "description": "A tiny SwiftBar-friendly Codex usage pressure gauge.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/owl-and-kestrel/glideslope.git"
+  },
   "bin": {
     "glideslope": "./bin/glideslope.mjs",
     "codex-usage-pressure": "./bin/glideslope.mjs"

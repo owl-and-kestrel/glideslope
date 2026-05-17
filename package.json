@@ -1,0 +1,26 @@
+{
+  "name": "glideslope",
+  "version": "0.1.0",
+  "description": "A tiny SwiftBar-friendly Codex usage pressure gauge.",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "glideslope": "./bin/glideslope.mjs",
+    "codex-usage-pressure": "./bin/glideslope.mjs"
+  },
+  "files": [
+    "bin/",
+    "swiftbar/",
+    "scripts/",
+    "README.md",
+    "spec.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "check": "node --check ./bin/glideslope.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

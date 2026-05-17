@@ -1,5 +1,35 @@
 import Foundation
 
+enum PressureBand: String, Codable {
+  case high
+  case good
+  case low
+  case unknown
+
+  init(pressurePercent: Double) {
+    if pressurePercent > 5 {
+      self = .high
+    } else if pressurePercent < -5 {
+      self = .low
+    } else {
+      self = .good
+    }
+  }
+
+  var label: String {
+    switch self {
+    case .high:
+      "High"
+    case .good:
+      "Good"
+    case .low:
+      "Low"
+    case .unknown:
+      "Unknown"
+    }
+  }
+}
+
 struct UsageStatus: Codable {
   var ok: Bool = false
   var source: String = "empty"

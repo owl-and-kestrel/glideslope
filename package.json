@@ -1,7 +1,7 @@
 {
   "name": "glideslope",
-  "version": "0.1.0",
-  "description": "A tiny SwiftBar-friendly Codex usage pressure gauge.",
+  "version": "0.2.0",
+  "description": "A tiny native macOS menu bar gauge for Codex usage pressure.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -14,6 +14,9 @@
   },
   "files": [
     "bin/",
+    "Package.swift",
+    "Sources/",
+    "script/",
     "swiftbar/",
     "scripts/",
     "README.md",

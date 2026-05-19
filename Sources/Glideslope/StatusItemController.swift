@@ -2,13 +2,17 @@ import AppKit
 
 @MainActor
 final class StatusItemController {
-  private let statusItem = NSStatusBar.system.statusItem(withLength: 38)
+  private let statusItem = NSStatusBar.system.statusItem(withLength: 25)
   private let store = UsageStore()
 
   init() {
-    statusItem.button?.imagePosition = .imageOnly
-    statusItem.button?.imageScaling = .scaleProportionallyUpOrDown
-    statusItem.button?.toolTip = "Glideslope"
+    if let button = statusItem.button {
+      button.bezelStyle = .regularSquare
+      button.isBordered = false
+      button.imagePosition = .imageOnly
+      button.imageScaling = .scaleProportionallyUpOrDown
+      button.toolTip = "Glideslope"
+    }
     statusItem.menu = makeMenu()
 
     updateIcon()

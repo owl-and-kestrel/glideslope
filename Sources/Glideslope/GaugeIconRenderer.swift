@@ -2,114 +2,84 @@ import AppKit
 
 enum GaugeIconRenderer {
   static func image(primary: UsageWindow?, weekly: UsageWindow?) -> NSImage {
-    let size = NSSize(width: 34, height: 24)
+    let size = NSSize(width: 24, height: 18)
+    let center = NSPoint(x: size.width / 2, y: size.height / 2)
+    let radius: CGFloat = 7.6
     let image = NSImage(size: size)
-    image.lockFocus()
 
+    image.lockFocus()
     NSColor.clear.setFill()
     NSRect(origin: .zero, size: size).fill()
 
-    let center = NSPoint(x: size.width / 2, y: size.height / 2)
-    let radius: CGFloat = 10
-
-    drawFace(center: center, radius: radius)
-
-    drawHand(
-      center: center,
-      length: 12.2,
-      width: 2.55,
-      pressurePercent: primary?.pressurePercent,
-      opacity: 0.94
-    )
-
-    drawHand(
-      center: center,
-      length: 9,
-      width: 2.15,
-      pressurePercent: weekly?.pressurePercent,
-      opacity: 0.82
-    )
+    drawDial(center: center, radius: radius)
+    drawHand(center: center, length: 9.25, width: 2, pressurePercent: primary?.pressurePercent, alpha: 0.94)
+    drawHand(center: center, length: 6.75, width: 1.7, pressurePercent: weekly?.pressurePercent, alpha: 0.82)
 
     NSColor.labelColor.setFill()
-    NSBezierPath(ovalIn: NSRect(x: center.x - 1.65, y: center.y - 1.65, width: 3.3, height: 3.3)).fill()
+    NSBezierPath(ovalIn: NSRect(x: center.x - 1.32, y: center.y - 1.32, width: 2.64, height: 2.64)).fill()
 
     image.unlockFocus()
     image.isTemplate = false
     return image
   }
 
-  private static func drawFace(center: NSPoint, radius: CGFloat) {
+  private static func drawDial(center: NSPoint, radius: CGFloat) {
     let start: CGFloat = 230
-    let end: CGFloat = -50
-    drawArcStroke(center: center, radius: radius, start: start, end: end, color: NSColor.labelColor.withAlphaComponent(0.82), lineWidth: 4.35)
-    drawGradientArc(center: center, radius: radius, start: start, end: end)
-  }
+    let sweep: CGFloat = -280
 
-  private static func drawGradientArc(center: NSPoint, radius: CGFloat, start: CGFloat, end: CGFloat) {
-    let segments = 48
+    strokeArc(center: center, radius: radius, start: start, end: start + sweep, color: NSColor.labelColor.withAlphaComponent(0.82), width: 3.2, rounded: true)
 
-    for index in 0..<segments {
-      let startT = CGFloat(index) / CGFloat(segments)
-      let endT = CGFloat(index + 1) / CGFloat(segments)
-      let segmentStart = start + (end - start) * startT
-      let segmentEnd = start + (end - start) * endT
+    let colors = [
+      NSColor(calibratedRed: 0.02, green: 0.48, blue: 0.95, alpha: 1),
+      NSColor(calibratedRed: 0.07, green: 0.57, blue: 0.78, alpha: 1),
+      NSColor(calibratedRed: 0.13, green: 0.65, blue: 0.55, alpha: 1),
+      NSColor(calibratedRed: 0.21, green: 0.72, blue: 0.30, alpha: 1),
+      NSColor(calibratedRed: 0.54, green: 0.62, blue: 0.25, alpha: 1),
+      NSColor(calibratedRed: 0.78, green: 0.45, blue: 0.22, alpha: 1),
+      NSColor(calibratedRed: 1.00, green: 0.23, blue: 0.19, alpha: 1)
+    ]
 
-      gradientColor(at: (startT + endT) / 2).setStroke()
-      let path = NSBezierPath()
-      path.lineWidth = 3.35
-      path.lineCapStyle = index == 0 || index == segments - 1 ? .round : .butt
-      path.appendArc(withCenter: center, radius: radius, startAngle: segmentStart, endAngle: segmentEnd, clockwise: true)
-      path.stroke()
+    let segmentSweep = sweep / CGFloat(colors.count)
+    for index in colors.indices {
+      let segmentStart = start + CGFloat(index) * segmentSweep
+      let segmentEnd = segmentStart + segmentSweep
+      strokeArc(center: center, radius: radius, start: segmentStart, end: segmentEnd, color: colors[index], width: 2.45, rounded: index == colors.startIndex || index == colors.index(before: colors.endIndex))
     }
   }
 
-  private static func drawArcStroke(center: NSPoint, radius: CGFloat, start: CGFloat, end: CGFloat, color: NSColor, lineWidth: CGFloat) {
+  private static func strokeArc(center: NSPoint, radius: CGFloat, start: CGFloat, end: CGFloat, color: NSColor, width: CGFloat, rounded: Bool) {
     color.setStroke()
     let path = NSBezierPath()
-    path.lineWidth = lineWidth
-    path.lineCapStyle = .round
+    path.lineWidth = width
+    path.lineCapStyle = rounded ? .round : .butt
     path.appendArc(withCenter: center, radius: radius, startAngle: start, endAngle: end, clockwise: true)
     path.stroke()
   }
 
-  private static func gradientColor(at position: CGFloat) -> NSColor {
-    let clamped = min(1, max(0, position))
-    if clamped < 0.5 {
-      return mix(.systemBlue, .systemGreen, amount: clamped / 0.5)
-    }
-
-    return mix(.systemGreen, .systemRed, amount: (clamped - 0.5) / 0.5)
-  }
-
-  private static func mix(_ start: NSColor, _ end: NSColor, amount: CGFloat) -> NSColor {
-    let startColor = start.usingColorSpace(.deviceRGB) ?? start
-    let endColor = end.usingColorSpace(.deviceRGB) ?? end
-    let amount = min(1, max(0, amount))
-
-    return NSColor(
-      calibratedRed: startColor.redComponent + (endColor.redComponent - startColor.redComponent) * amount,
-      green: startColor.greenComponent + (endColor.greenComponent - startColor.greenComponent) * amount,
-      blue: startColor.blueComponent + (endColor.blueComponent - startColor.blueComponent) * amount,
-      alpha: 1
-    )
-  }
-
-  private static func drawHand(center: NSPoint, length: CGFloat, width: CGFloat, pressurePercent: Double?, opacity: CGFloat) {
-    NSColor.labelColor.withAlphaComponent(opacity).setFill()
-    let angle = angle(for: pressurePercent)
-    let radians = angle * .pi / 180
-    let direction = CGPoint(x: cos(radians), y: sin(radians))
-    let normal = CGPoint(x: -direction.y, y: direction.x)
-    let tip = NSPoint(x: center.x + direction.x * length, y: center.y + direction.y * length)
-    let base = NSPoint(x: center.x - direction.x * 2.35, y: center.y - direction.y * 2.35)
+  private static func drawHand(center: NSPoint, length: CGFloat, width: CGFloat, pressurePercent: Double?, alpha: CGFloat) {
+    let radians = angle(for: pressurePercent) * .pi / 180
+    let dx = cos(radians)
+    let dy = sin(radians)
+    let nx = -dy
+    let ny = dx
     let halfWidth = width / 2
+    let tail: CGFloat = 2.05
+    let tailWidth = halfWidth * 0.72
 
+    let tip = NSPoint(x: center.x + dx * length, y: center.y + dy * length)
+    let shoulderLeft = NSPoint(x: center.x + nx * halfWidth, y: center.y + ny * halfWidth)
+    let shoulderRight = NSPoint(x: center.x - nx * halfWidth, y: center.y - ny * halfWidth)
+    let tailCenter = NSPoint(x: center.x - dx * tail, y: center.y - dy * tail)
+    let tailLeft = NSPoint(x: tailCenter.x + nx * tailWidth, y: tailCenter.y + ny * tailWidth)
+    let tailRight = NSPoint(x: tailCenter.x - nx * tailWidth, y: tailCenter.y - ny * tailWidth)
+
+    NSColor.labelColor.withAlphaComponent(alpha).setFill()
     let hand = NSBezierPath()
     hand.move(to: tip)
-    hand.line(to: NSPoint(x: center.x + normal.x * halfWidth, y: center.y + normal.y * halfWidth))
-    hand.line(to: NSPoint(x: base.x + normal.x * halfWidth * 0.72, y: base.y + normal.y * halfWidth * 0.72))
-    hand.line(to: NSPoint(x: base.x - normal.x * halfWidth * 0.72, y: base.y - normal.y * halfWidth * 0.72))
-    hand.line(to: NSPoint(x: center.x - normal.x * halfWidth, y: center.y - normal.y * halfWidth))
+    hand.line(to: shoulderLeft)
+    hand.line(to: tailLeft)
+    hand.line(to: tailRight)
+    hand.line(to: shoulderRight)
     hand.close()
     hand.fill()
   }
@@ -119,9 +89,8 @@ enum GaugeIconRenderer {
       return 90
     }
 
-    let clamped = min(30, max(-30, pressurePercent))
-    let normalized = CGFloat(clamped / 30)
-    return 90 + normalized * 130
+    let bounded = min(30, max(-30, pressurePercent))
+    return 90 + CGFloat(bounded / 30) * 130
   }
 }
 

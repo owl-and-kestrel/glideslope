@@ -1,22 +1,19 @@
 import AppKit
-import SwiftUI
 
 @main
-struct GlideslopeApp: App {
-  @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-
-  var body: some Scene {
-    Settings {
-      EmptyView()
-    }
-  }
-}
-
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+  private static let sharedDelegate = AppDelegate()
   private var controller: StatusItemController?
 
+  static func main() {
+    let app = NSApplication.shared
+    app.delegate = sharedDelegate
+    app.setActivationPolicy(.accessory)
+    app.run()
+  }
+
   func applicationDidFinishLaunching(_ notification: Notification) {
-    NSApp.setActivationPolicy(.accessory)
     controller = StatusItemController()
   }
 }

@@ -2,12 +2,16 @@
 
 Glideslope is a tiny macOS menu bar gauge for Codex usage pressure.
 
-The menu bar icon has two halves:
+The menu bar icon has two hands:
 
-- left: 5-hour usage window
-- right: weekly usage window
+- long hand: 5-hour usage window
+- short hand: weekly usage window
 
-Each half uses a simple temperature color:
+The hands are pace-relative consumption meters. A hand pegged left means `0%` consumed, centered means exactly on the expected reset pace, and pegged right means `100%` consumed / `0%` remaining.
+
+The hand color follows system appearance: black in light mode, white in dark mode.
+
+The menu uses a simple pressure color:
 
 - blue: high / too cold / plenty of slack
 - green: good / on pace

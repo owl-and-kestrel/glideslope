@@ -36,6 +36,8 @@ high  pressure > +5 percentage points
 
 The menu bar should show the most constrained window: the window with the lowest pressure.
 
+The native icon should use a pace-relative consumption scale. A hand pegged left means `0%` consumed, centered means exactly on the expected reset pace, and pegged right means `100%` consumed / `0%` remaining. In other words, usage from `0%` consumed to the on-track amount maps across the left half, and usage from on-track to exhausted maps across the right half. The hand should resolve to black in light mode and white in dark mode.
+
 Example:
 
 ```text

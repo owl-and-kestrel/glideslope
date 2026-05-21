@@ -1,21 +1,23 @@
 import AppKit
 
 enum GaugeIconRenderer {
+  @MainActor
   static func image(primary: UsageWindow?, weekly: UsageWindow?) -> NSImage {
     let size = NSSize(width: 24, height: 18)
     let center = NSPoint(x: size.width / 2, y: size.height / 2)
     let radius: CGFloat = 7.6
     let image = NSImage(size: size)
+    let handColor = resolvedHandColor()
 
     image.lockFocus()
     NSColor.clear.setFill()
     NSRect(origin: .zero, size: size).fill()
 
     drawDial(center: center, radius: radius)
-    drawHand(center: center, length: 9.25, width: 2, pressurePercent: primary?.pressurePercent, alpha: 0.94)
-    drawHand(center: center, length: 6.75, width: 1.7, pressurePercent: weekly?.pressurePercent, alpha: 0.82)
+    drawHand(center: center, length: 9.25, width: 2, window: primary, color: handColor, alpha: 0.94)
+    drawHand(center: center, length: 6.75, width: 1.7, window: weekly, color: handColor, alpha: 0.82)
 
-    NSColor.labelColor.setFill()
+    handColor.setFill()
     NSBezierPath(ovalIn: NSRect(x: center.x - 1.32, y: center.y - 1.32, width: 2.64, height: 2.64)).fill()
 
     image.unlockFocus()
@@ -56,8 +58,8 @@ enum GaugeIconRenderer {
     path.stroke()
   }
 
-  private static func drawHand(center: NSPoint, length: CGFloat, width: CGFloat, pressurePercent: Double?, alpha: CGFloat) {
-    let radians = angle(for: pressurePercent) * .pi / 180
+  private static func drawHand(center: NSPoint, length: CGFloat, width: CGFloat, window: UsageWindow?, color: NSColor, alpha: CGFloat) {
+    let radians = angle(for: window) * .pi / 180
     let dx = cos(radians)
     let dy = sin(radians)
     let nx = -dy
@@ -73,7 +75,7 @@ enum GaugeIconRenderer {
     let tailLeft = NSPoint(x: tailCenter.x + nx * tailWidth, y: tailCenter.y + ny * tailWidth)
     let tailRight = NSPoint(x: tailCenter.x - nx * tailWidth, y: tailCenter.y - ny * tailWidth)
 
-    NSColor.labelColor.withAlphaComponent(alpha).setFill()
+    color.withAlphaComponent(alpha).setFill()
     let hand = NSBezierPath()
     hand.move(to: tip)
     hand.line(to: shoulderLeft)
@@ -84,13 +86,56 @@ enum GaugeIconRenderer {
     hand.fill()
   }
 
-  private static func angle(for pressurePercent: Double?) -> CGFloat {
-    guard let pressurePercent else {
+  @MainActor
+  private static func resolvedHandColor() -> NSColor {
+    let appearance = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
+
+    // This image is rendered manually and marked non-template so the status bar
+    // will not automatically recolor it. Resolve the needle color ourselves.
+    return appearance == .darkAqua ? .white : .black
+  }
+
+  static func angle(for window: UsageWindow?) -> CGFloat {
+    guard let window else {
       return 90
     }
 
-    let bounded = min(30, max(-30, pressurePercent))
-    return 90 + CGFloat(bounded / 30) * 130
+    return angle(
+      usedPercent: window.usedPercent,
+      expectedRemainingPercent: window.expectedRemainingPercent
+    )
+  }
+
+  static func angle(usedPercent: Double, expectedRemainingPercent: Double) -> CGFloat {
+    let position = dialPosition(
+      usedPercent: usedPercent,
+      expectedRemainingPercent: expectedRemainingPercent
+    )
+    return 230 - CGFloat(position / 100) * 280
+  }
+
+  static func dialPosition(usedPercent: Double, expectedRemainingPercent: Double) -> Double {
+    let used = min(100, max(0, usedPercent))
+    let expectedUsed = min(100, max(0, 100 - expectedRemainingPercent))
+
+    // The dial is pace-relative: 0% consumed is the left endpoint, exactly
+    // on-track is the center, and fully consumed is the right endpoint.
+    if used <= 0 {
+      return 0
+    }
+    if used >= 100 {
+      return 100
+    }
+    if expectedUsed <= 0 {
+      return 50 + used / 100 * 50
+    }
+    if expectedUsed >= 100 {
+      return used / 100 * 50
+    }
+    if used <= expectedUsed {
+      return used / expectedUsed * 50
+    }
+    return 50 + (used - expectedUsed) / (100 - expectedUsed) * 50
   }
 }
 

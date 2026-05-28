@@ -1,105 +1,165 @@
 import AppKit
 
+/// Renders the menu-bar dial as a dark circle with a dotted gauge scale and two
+/// (or four) bold hands. The hands are the point of the program, so they are
+/// large and vivid; the scale recedes to white dots, and the only colored part
+/// of the scale is a bright-red redline cluster on the hot end.
+///
+/// The canvas is square so the dial never crops against the menu bar.
+///
+/// Deconfliction:
+///   • provider  -> hand color (Codex teal, Claude coral)
+///   • window    -> radius + depth: the fast (~5h) window is a long hand drawn
+///                  first (background); the slow (weekly) window is a shorter
+///                  hand drawn last (foreground).
 enum GaugeIconRenderer {
+  static let size = NSSize(width: 22, height: 22)
+  private static let circleRadius: CGFloat = 10.5
+  private static let dotRadius: CGFloat = 8.6
+  private static let dotCount = 16
+  private static let dialStart: CGFloat = 230
+  private static let dialSweep: CGFloat = -280
+  /// Consumption fraction beyond which the scale dots turn red.
+  private static let redlineFraction: CGFloat = 0.78
+
   @MainActor
-  static func image(primary: UsageWindow?, weekly: UsageWindow?) -> NSImage {
-    let size = NSSize(width: 24, height: 18)
+  static func image(status: UsageStatus, scale: CGFloat = 1) -> NSImage {
     let center = NSPoint(x: size.width / 2, y: size.height / 2)
-    let radius: CGFloat = 7.6
-    let image = NSImage(size: size)
-    let handColor = resolvedHandColor()
+    let image = NSImage(size: NSSize(width: size.width * scale, height: size.height * scale))
 
     image.lockFocus()
+    if scale != 1 {
+      let transform = NSAffineTransform()
+      transform.scale(by: scale)
+      transform.concat()
+    }
     NSColor.clear.setFill()
     NSRect(origin: .zero, size: size).fill()
 
-    drawDial(center: center, radius: radius)
-    drawHand(center: center, length: 9.25, width: 2, window: primary, color: handColor, alpha: 0.94)
-    drawHand(center: center, length: 6.75, width: 1.7, window: weekly, color: handColor, alpha: 0.82)
+    drawFace(center: center)
+    drawScale(center: center)
 
-    handColor.setFill()
-    NSBezierPath(ovalIn: NSRect(x: center.x - 1.32, y: center.y - 1.32, width: 2.64, height: 2.64)).fill()
+    // Draw long (slow) lines first, then short (fast) lines on top, so a short
+    // outer line is never hidden under a long line when their angles align.
+    // Within each band, the most-constrained (lowest pressure) draws last.
+    let ordered = status.windows.sorted { a, b in
+      if a.speed != b.speed { return a.speed == .slow }
+      return a.pressurePercent > b.pressurePercent
+    }
+    for window in ordered {
+      drawHand(center: center, window: window)
+    }
+
+    drawHub(center: center)
 
     image.unlockFocus()
     image.isTemplate = false
     return image
   }
 
-  private static func drawDial(center: NSPoint, radius: CGFloat) {
-    let start: CGFloat = 230
-    let sweep: CGFloat = -280
+  // MARK: - Face & scale
 
-    strokeArc(center: center, radius: radius, start: start, end: start + sweep, color: NSColor.labelColor.withAlphaComponent(0.82), width: 3.2, rounded: true)
+  private static func drawFace(center: NSPoint) {
+    let rect = NSRect(x: center.x - circleRadius, y: center.y - circleRadius, width: circleRadius * 2, height: circleRadius * 2)
+    NSColor(calibratedWhite: 0.09, alpha: 0.96).setFill()
+    NSBezierPath(ovalIn: rect).fill()
+  }
 
-    let colors = [
-      NSColor(calibratedRed: 0.02, green: 0.48, blue: 0.95, alpha: 1),
-      NSColor(calibratedRed: 0.07, green: 0.57, blue: 0.78, alpha: 1),
-      NSColor(calibratedRed: 0.13, green: 0.65, blue: 0.55, alpha: 1),
-      NSColor(calibratedRed: 0.21, green: 0.72, blue: 0.30, alpha: 1),
-      NSColor(calibratedRed: 0.54, green: 0.62, blue: 0.25, alpha: 1),
-      NSColor(calibratedRed: 0.78, green: 0.45, blue: 0.22, alpha: 1),
-      NSColor(calibratedRed: 1.00, green: 0.23, blue: 0.19, alpha: 1)
-    ]
-
-    let segmentSweep = sweep / CGFloat(colors.count)
-    for index in colors.indices {
-      let segmentStart = start + CGFloat(index) * segmentSweep
-      let segmentEnd = segmentStart + segmentSweep
-      strokeArc(center: center, radius: radius, start: segmentStart, end: segmentEnd, color: colors[index], width: 2.45, rounded: index == colors.startIndex || index == colors.index(before: colors.endIndex))
+  private static func drawScale(center: NSPoint) {
+    // Small white dots form the scale up to the redline — kept subtle so the
+    // hands dominate.
+    let dotR: CGFloat = 0.62
+    NSColor(calibratedWhite: 0.90, alpha: 0.8).setFill()
+    for index in 0..<dotCount {
+      let fraction = CGFloat(index) / CGFloat(dotCount - 1)
+      if fraction >= redlineFraction { continue }
+      let angle = (dialStart + dialSweep * fraction) * .pi / 180
+      let point = NSPoint(x: center.x + cos(angle) * dotRadius, y: center.y + sin(angle) * dotRadius)
+      NSBezierPath(ovalIn: NSRect(x: point.x - dotR, y: point.y - dotR, width: dotR * 2, height: dotR * 2)).fill()
     }
+
+    // The redline is a solid bright-red arc over the hot end, not dots.
+    let redStart = dialStart + dialSweep * redlineFraction
+    let redEnd = dialStart + dialSweep
+    let red = NSColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)
+    red.setStroke()
+    let arc = NSBezierPath()
+    arc.lineWidth = 2.3
+    arc.lineCapStyle = .round
+    arc.appendArc(withCenter: center, radius: dotRadius, startAngle: redStart, endAngle: redEnd, clockwise: true)
+    arc.stroke()
   }
 
-  private static func strokeArc(center: NSPoint, radius: CGFloat, start: CGFloat, end: CGFloat, color: NSColor, width: CGFloat, rounded: Bool) {
-    color.setStroke()
-    let path = NSBezierPath()
-    path.lineWidth = width
-    path.lineCapStyle = rounded ? .round : .butt
-    path.appendArc(withCenter: center, radius: radius, startAngle: start, endAngle: end, clockwise: true)
-    path.stroke()
-  }
+  // MARK: - Hands
 
-  private static func drawHand(center: NSPoint, length: CGFloat, width: CGFloat, window: UsageWindow?, color: NSColor, alpha: CGFloat) {
+  // Dots sit at `dotRadius` = 8.6; the circle face ends at `circleRadius` = 10.5.
+  // The two window kinds occupy different radial bands so they never swallow
+  // each other when their angles align.
+  private static func drawHand(center: NSPoint, window: UsageWindow) {
     let radians = angle(for: window) * .pi / 180
     let dx = cos(radians)
     let dy = sin(radians)
     let nx = -dy
     let ny = dx
-    let halfWidth = width / 2
-    let tail: CGFloat = 2.05
-    let tailWidth = halfWidth * 0.72
 
-    let tip = NSPoint(x: center.x + dx * length, y: center.y + dy * length)
-    let shoulderLeft = NSPoint(x: center.x + nx * halfWidth, y: center.y + ny * halfWidth)
-    let shoulderRight = NSPoint(x: center.x - nx * halfWidth, y: center.y - ny * halfWidth)
-    let tailCenter = NSPoint(x: center.x - dx * tail, y: center.y - dy * tail)
-    let tailLeft = NSPoint(x: tailCenter.x + nx * tailWidth, y: tailCenter.y + ny * tailWidth)
-    let tailRight = NSPoint(x: tailCenter.x - nx * tailWidth, y: tailCenter.y - ny * tailWidth)
+    // (r) = distance along the hand's angle, (t) = tangential offset.
+    func point(_ r: CGFloat, _ t: CGFloat = 0) -> NSPoint {
+      NSPoint(x: center.x + dx * r + nx * t, y: center.y + dy * r + ny * t)
+    }
 
-    color.withAlphaComponent(alpha).setFill()
-    let hand = NSBezierPath()
-    hand.move(to: tip)
-    hand.line(to: shoulderLeft)
-    hand.line(to: tailLeft)
-    hand.line(to: tailRight)
-    hand.line(to: shoulderRight)
-    hand.close()
-    hand.fill()
+    let line = NSBezierPath()
+    let colorWidth: CGFloat
+    switch window.speed {
+    case .slow:
+      // Long window (weekly): a long line from a short tail through the hub out
+      // past the tick marks.
+      line.move(to: point(-1.2))
+      line.line(to: point(9.4))
+      colorWidth = 1.9
+    case .fast:
+      // Short window (5h): a short bold line in the outer band, from the edge
+      // inward past the tick marks — an emphasized tick.
+      line.move(to: point(10.3))
+      line.line(to: point(7.5))
+      colorWidth = 2.1
+    }
+    line.lineCapStyle = .round
+
+    // Thin dark edge under the bright color line for separation on overlaps.
+    NSColor.black.setStroke()
+    line.lineWidth = colorWidth + 0.8
+    line.stroke()
+    providerColor(window.provider).setStroke()
+    line.lineWidth = colorWidth
+    line.stroke()
   }
 
-  @MainActor
-  private static func resolvedHandColor() -> NSColor {
-    let appearance = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua])
-
-    // This image is rendered manually and marked non-template so the status bar
-    // will not automatically recolor it. Resolve the needle color ourselves.
-    return appearance == .darkAqua ? .white : .black
+  private static func drawHub(center: NSPoint) {
+    let r: CGFloat = 0.9
+    let cap = NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
+    NSColor(calibratedWhite: 0.97, alpha: 1).setFill()
+    cap.fill()
   }
+
+  // MARK: - Colors
+
+  /// Provider accent for the hands and the dropdown swatch. Tuned to read as
+  /// vivid teal / coral on the dark face, and distinct from each other.
+  static func providerColor(_ provider: Provider) -> NSColor {
+    switch provider {
+    case .codex:
+      NSColor(calibratedRed: 0.16, green: 0.82, blue: 0.84, alpha: 1)
+    case .claude:
+      NSColor(calibratedRed: 1.00, green: 0.55, blue: 0.34, alpha: 1)
+    }
+  }
+
+  // MARK: - Pace-relative angle
 
   static func angle(for window: UsageWindow?) -> CGFloat {
     guard let window else {
       return 90
     }
-
     return angle(
       usedPercent: window.usedPercent,
       expectedRemainingPercent: window.expectedRemainingPercent
@@ -111,7 +171,7 @@ enum GaugeIconRenderer {
       usedPercent: usedPercent,
       expectedRemainingPercent: expectedRemainingPercent
     )
-    return 230 - CGFloat(position / 100) * 280
+    return dialStart + CGFloat(position / 100) * dialSweep
   }
 
   static func dialPosition(usedPercent: Double, expectedRemainingPercent: Double) -> Double {

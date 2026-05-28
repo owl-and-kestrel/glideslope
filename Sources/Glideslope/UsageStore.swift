@@ -3,13 +3,75 @@ import Observation
 
 @Observable
 final class UsageStore {
-  private let client = CodexUsageClient()
+  private let codex = CodexUsageClient()
+  private let claude = ClaudeUsageClient()
 
   var status = UsageStatus()
 
+  /// Last successful windows per provider. A transient fetch failure (e.g. an
+  /// HTTP 429 on Claude's usage endpoint) should never blank the hands, so we
+  /// keep showing the most recent good reading, labeled stale.
+  private var lastGood: [Provider: [UsageWindow]] = [:]
+
+  // Claude's usage endpoint rate-limits aggressively (it's meant for on-demand
+  // `/usage` lookups, not a 60s poll), so we poll it gently and back off hard
+  // on failure, decoupled from Codex's per-minute cadence.
+  private static let claudeBaseInterval: TimeInterval = 240
+  private static let claudeMaxBackoff: TimeInterval = 900
+  private var claudeNextAllowed: Date = .distantPast
+  private var claudeBackoff: TimeInterval = 0
+
   @MainActor
   func refresh() async {
-    status = await client.status()
+    let now = Date()
+    // Codex polls every cycle; copy the (Sendable) client into a local so we
+    // don't send main-actor `self` across the concurrency boundary.
+    let codex = self.codex
+    async let codexResult = codex.result(now: now)
+
+    // Poll Claude only when its gentle cadence/backoff allows.
+    let claudeResult: ProviderResult
+    if now >= claudeNextAllowed {
+      let fresh = await claude.result(now: now)
+      if fresh.ok {
+        claudeBackoff = 0
+        claudeNextAllowed = now.addingTimeInterval(Self.claudeBaseInterval)
+      } else {
+        claudeBackoff = claudeBackoff == 0
+          ? Self.claudeBaseInterval
+          : min(Self.claudeMaxBackoff, claudeBackoff * 2)
+        claudeNextAllowed = now.addingTimeInterval(claudeBackoff)
+      }
+      claudeResult = fresh
+    } else {
+      // Not due yet — let reconcile() fall back to the cached hands.
+      claudeResult = .failure(.claude, source: "throttled", error: "rate-limited — retrying")
+    }
+
+    status = UsageStatus(
+      generatedAt: now,
+      results: [reconcile(await codexResult), reconcile(claudeResult)]
+    )
+  }
+
+  /// Fold a fresh poll against the last-good cache: on success, refresh the
+  /// cache; on a transient failure, fall back to the cached windows so the
+  /// hands stay on screen (marked `cached`) rather than vanishing.
+  private func reconcile(_ result: ProviderResult) -> ProviderResult {
+    if result.ok, !result.windows.isEmpty {
+      lastGood[result.provider] = result.windows
+      return result
+    }
+    if let cached = lastGood[result.provider], !cached.isEmpty {
+      return ProviderResult(
+        provider: result.provider,
+        ok: true,
+        source: "cached",
+        error: result.error,
+        windows: cached
+      )
+    }
+    return result
   }
 
   @MainActor
@@ -21,99 +83,4 @@ final class UsageStore {
       await refresh()
     }
   }
-}
-
-struct CodexUsageClient {
-  private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
-
-  func status() async -> UsageStatus {
-    do {
-      let payload = try await fetchPayload()
-      return status(from: payload, source: "live")
-    } catch {
-      return UsageStatus(
-        ok: false,
-        source: "error",
-        error: String(describing: error),
-        generatedAt: .now,
-        windows: []
-      )
-    }
-  }
-
-  private func fetchPayload() async throws -> UsagePayload {
-    let auth = try readAuth()
-    guard let token = auth.tokens?.accessToken, !token.isEmpty else {
-      throw UsageError.missingToken
-    }
-
-    var request = URLRequest(url: usageURL)
-    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.setValue("Glideslope/0.2", forHTTPHeaderField: "User-Agent")
-    if let accountId = auth.tokens?.accountId, !accountId.isEmpty {
-      request.setValue(accountId, forHTTPHeaderField: "ChatGPT-Account-Id")
-    }
-
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-      throw UsageError.fetchFailed
-    }
-
-    return try JSONDecoder().decode(UsagePayload.self, from: data)
-  }
-
-  private func readAuth() throws -> AuthFile {
-    let home = FileManager.default.homeDirectoryForCurrentUser
-    let codexHome = ProcessInfo.processInfo.environment["CODEX_HOME"].map(URL.init(fileURLWithPath:)) ?? home.appending(path: ".codex")
-    let authURL = codexHome.appending(path: "auth.json")
-    let data = try Data(contentsOf: authURL)
-    return try JSONDecoder().decode(AuthFile.self, from: data)
-  }
-
-  private func status(from payload: UsagePayload, source: String) -> UsageStatus {
-    let now = Date()
-    let windows = [
-      normalize(id: "primary_window", label: "5h", window: payload.rateLimit.primaryWindow, now: now),
-      normalize(id: "secondary_window", label: "Weekly", window: payload.rateLimit.secondaryWindow, now: now)
-    ].compactMap { $0 }
-
-    return UsageStatus(
-      ok: !windows.isEmpty,
-      source: source,
-      error: nil,
-      generatedAt: now,
-      windows: windows
-    )
-  }
-
-  private func normalize(id: String, label: String, window: RateLimitWindow?, now: Date) -> UsageWindow? {
-    guard let window else {
-      return nil
-    }
-
-    let used = min(100, max(0, window.usedPercent))
-    let resetAt = Date(timeIntervalSince1970: window.resetAt)
-    let secondsRemaining = max(0, resetAt.timeIntervalSince(now))
-    let duration = max(60, window.limitWindowSeconds)
-    let expectedRemaining = min(1, max(0, secondsRemaining / duration))
-    let actualRemaining = min(1, max(0, 1 - used / 100))
-    let pressure = actualRemaining - expectedRemaining
-
-    return UsageWindow(
-      id: id,
-      label: label,
-      usedPercent: used,
-      remainingPercent: actualRemaining * 100,
-      expectedRemainingPercent: expectedRemaining * 100,
-      pressurePercent: pressure * 100,
-      resetAt: resetAt,
-      limitWindowSeconds: duration
-    )
-  }
-}
-
-enum UsageError: Error {
-  case missingToken
-  case fetchFailed
 }

@@ -1,7 +1,7 @@
 {
   "name": "glideslope",
-  "version": "0.2.0",
-  "description": "A tiny native macOS menu bar gauge for Codex usage pressure.",
+  "version": "0.3.0",
+  "description": "A tiny native macOS menu bar gauge for Codex and Claude Code usage pressure.",
   "type": "module",
   "license": "MIT",
   "repository": {

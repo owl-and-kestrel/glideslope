@@ -9,7 +9,8 @@ enum RenderHarness {
     let scenarios: [(String, UsageStatus)] = [
       ("typical", sample(codexFast: 28, codexSlow: 55, claudeFast: 74, claudeSlow: 18)),
       ("codex hot", sample(codexFast: 92, codexSlow: 80, claudeFast: 12, claudeSlow: 40)),
-      ("claude only", sample(codexFast: nil, codexSlow: nil, claudeFast: 60, claudeSlow: 30))
+      ("claude only", sample(codexFast: nil, codexSlow: nil, claudeFast: 60, claudeSlow: 30)),
+      ("fable scoped", sample(codexFast: 34, codexSlow: 45, claudeFast: 0, claudeSlow: 44, claudeFable: 78))
     ]
 
     let scale: CGFloat = 12
@@ -78,13 +79,36 @@ enum RenderHarness {
     }
   }
 
-  private static func sample(codexFast: Double?, codexSlow: Double?, claudeFast: Double?, claudeSlow: Double?) -> UsageStatus {
+  private static func sample(
+    codexFast: Double?,
+    codexSlow: Double?,
+    claudeFast: Double?,
+    claudeSlow: Double?,
+    claudeFable: Double? = nil
+  ) -> UsageStatus {
     let now = Date()
-    func win(_ provider: Provider, _ speed: WindowSpeed, _ used: Double?, _ duration: TimeInterval, _ elapsedFraction: Double) -> UsageWindow? {
+    func win(
+      _ provider: Provider,
+      _ speed: WindowSpeed,
+      _ used: Double?,
+      _ duration: TimeInterval,
+      _ elapsedFraction: Double,
+      scope: UsageScope? = nil,
+      visualStyle: UsageVisualStyle = .hand
+    ) -> UsageWindow? {
       guard let used else { return nil }
       // Place the reset so that `elapsedFraction` of the window has passed.
       let resetAt = now.addingTimeInterval(duration * (1 - elapsedFraction))
-      return PressureMath.window(provider: provider, speed: speed, usedPercent: used, resetAt: resetAt, limitWindowSeconds: duration, now: now)
+      return PressureMath.window(
+        provider: provider,
+        speed: speed,
+        usedPercent: used,
+        resetAt: resetAt,
+        limitWindowSeconds: duration,
+        now: now,
+        scope: scope,
+        visualStyle: visualStyle
+      )
     }
     let codexWindows = [
       win(.codex, .fast, codexFast, 5 * 3600, 0.5),
@@ -92,7 +116,8 @@ enum RenderHarness {
     ].compactMap { $0 }
     let claudeWindows = [
       win(.claude, .fast, claudeFast, 5 * 3600, 0.5),
-      win(.claude, .slow, claudeSlow, 7 * 24 * 3600, 0.5)
+      win(.claude, .slow, claudeSlow, 7 * 24 * 3600, 0.5),
+      win(.claude, .slow, claudeFable, 7 * 24 * 3600, 0.5, scope: .fable, visualStyle: .outerStar)
     ].compactMap { $0 }
     return UsageStatus(generatedAt: now, results: [
       ProviderResult(provider: .codex, ok: !codexWindows.isEmpty, source: "sample", error: codexWindows.isEmpty ? "sample" : nil, windows: codexWindows),

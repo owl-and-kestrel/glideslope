@@ -1,6 +1,7 @@
 {
   "name": "glideslope",
-  "version": "0.3.0",
+  "version": "0.4.0",
+  "build": 8,
   "description": "A tiny native macOS menu bar gauge for Codex and Claude Code usage pressure.",
   "type": "module",
   "license": "MIT",
@@ -14,8 +15,12 @@
   },
   "files": [
     "bin/",
+    "config/",
     "Package.swift",
+    "Package.resolved",
     "Sources/",
+    "Tests/",
+    "docs/",
     "script/",
     "swiftbar/",
     "scripts/",
@@ -24,8 +29,13 @@
     "LICENSE"
   ],
   "scripts": {
+    "build:native": "./script/build_and_run.sh --build",
     "check": "node --check ./bin/glideslope.mjs",
-    "test": "node --test"
+    "package:release": "./script/package_release.sh",
+    "release:dry-run": "node ./scripts/publish-release.mjs",
+    "release:publish": "node ./scripts/publish-release.mjs --publish",
+    "test": "node --test",
+    "test:swift": "./script/test_swift.sh"
   },
   "engines": {
     "node": ">=20"

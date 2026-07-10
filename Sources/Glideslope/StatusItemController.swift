@@ -4,6 +4,7 @@ import AppKit
 final class StatusItemController {
   private let statusItem = NSStatusBar.system.statusItem(withLength: 24)
   private let store = UsageStore()
+  private let updater = AppUpdater()
 
   init() {
     if let button = statusItem.button {
@@ -51,21 +52,24 @@ final class StatusItemController {
     }
 
     menu.addItem(.separator())
+    addReleaseSection(to: menu)
+    menu.addItem(.separator())
+    addSettingsSection(to: menu)
+    menu.addItem(.separator())
     menu.addItem(NSMenuItem(title: "Refresh", action: #selector(refresh), keyEquivalent: "r"))
     menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
 
-    for item in menu.items {
-      item.target = self
-    }
+    setTargets(in: menu)
 
     statusItem.menu = menu
   }
 
   private func addProviderSection(_ provider: Provider, to menu: NSMenu) {
+    let style = AppSettings.iconStyle
     let result = store.status.result(for: provider)
-    let headerTitle = result?.source == "cached" ? "\(provider.displayName) (cached)" : provider.displayName
+    let headerTitle = result?.sourceLabel.map { "\(provider.displayName) (\($0))" } ?? provider.displayName
     let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
-    header.image = swatchImage(color: GaugeIconRenderer.providerColor(provider))
+    header.image = swatchImage(color: GaugeIconRenderer.providerColor(provider, style: style))
     header.isEnabled = false
     menu.addItem(header)
     if let result, result.ok, !result.windows.isEmpty {
@@ -75,15 +79,22 @@ final class StatusItemController {
           action: nil,
           keyEquivalent: ""
         )
-        item.image = dotImage(color: window.band.nsColor)
+        item.image = markerImage(for: window, style: style)
         item.isEnabled = false
         menu.addItem(item)
       }
+      if result.source == "cached" {
+        let detailParts = [
+          result.cacheAgeDisplay.map { "last live \($0) ago" },
+          result.error
+        ].compactMap { $0 }
+        if !detailParts.isEmpty {
+          addDisabledItem("    \(detailParts.joined(separator: "; "))", to: menu)
+        }
+      }
     } else {
       let reason = result?.error ?? "usage unavailable"
-      let item = NSMenuItem(title: "    \(reason)", action: nil, keyEquivalent: "")
-      item.isEnabled = false
-      menu.addItem(item)
+      addDisabledItem("    \(reason)", to: menu)
     }
 
     if result?.needsAuth == true {
@@ -94,8 +105,162 @@ final class StatusItemController {
   }
 
   private func updateIcon() {
-    statusItem.button?.image = GaugeIconRenderer.image(status: store.status)
+    statusItem.button?.image = GaugeIconRenderer.image(status: store.status, style: AppSettings.iconStyle)
     statusItem.button?.toolTip = store.status.summary
+  }
+
+  private func addReleaseSection(to menu: NSMenu) {
+    let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+      ?? "development build"
+    addDisabledItem("Glideslope \(version)", to: menu)
+
+    let checkForUpdates = NSMenuItem(
+      title: "Check for Updates…",
+      action: #selector(checkForUpdatesFromMenu),
+      keyEquivalent: "u"
+    )
+    checkForUpdates.isEnabled = updater.canCheckForUpdates
+    menu.addItem(checkForUpdates)
+
+    let automaticUpdates = NSMenuItem(
+      title: "Install Updates Automatically",
+      action: #selector(toggleAutomaticUpdates),
+      keyEquivalent: ""
+    )
+    automaticUpdates.state = updater.automaticallyInstallsUpdates ? .on : .off
+    menu.addItem(automaticUpdates)
+  }
+
+  private func addSettingsSection(to menu: NSMenu) {
+    let settings = NSMenuItem(title: "Icon Settings", action: nil, keyEquivalent: "")
+    let settingsMenu = NSMenu()
+    settingsMenu.autoenablesItems = false
+
+    addDisabledItem("Fable", to: settingsMenu)
+    settingsMenu.addItem(sliderItem(for: .fableStarSize))
+    settingsMenu.addItem(sliderItem(for: .fableStarRadius))
+
+    settingsMenu.addItem(.separator())
+    addDisabledItem("5h Hand", to: settingsMenu)
+    settingsMenu.addItem(sliderItem(for: .fastHandLength))
+    settingsMenu.addItem(sliderItem(for: .fastHandWidth))
+    settingsMenu.addItem(sliderItem(for: .fastHandRadius))
+
+    settingsMenu.addItem(.separator())
+    addDisabledItem("Weekly Hand", to: settingsMenu)
+    settingsMenu.addItem(sliderItem(for: .weeklyHandLength))
+    settingsMenu.addItem(sliderItem(for: .weeklyHandWidth))
+    settingsMenu.addItem(sliderItem(for: .weeklyHandRadius))
+
+    settingsMenu.addItem(.separator())
+    addDisabledItem("Scale", to: settingsMenu)
+    settingsMenu.addItem(sliderItem(for: .scaleDotSize))
+    settingsMenu.addItem(sliderItem(for: .scaleRadius))
+    settingsMenu.addItem(sliderItem(for: .redlineWidth))
+
+    settingsMenu.addItem(.separator())
+    addDisabledItem("Center", to: settingsMenu)
+    settingsMenu.addItem(sliderItem(for: .hubSize))
+
+    settingsMenu.addItem(.separator())
+    settingsMenu.addItem(colorSubmenu(
+      title: "Codex Color",
+      current: AppSettings.codexColor,
+      action: #selector(setCodexColor(_:))
+    ))
+    settingsMenu.addItem(colorSubmenu(
+      title: "Claude Color",
+      current: AppSettings.claudeColor,
+      action: #selector(setClaudeColor(_:))
+    ))
+    settingsMenu.addItem(colorSubmenu(
+      title: "Redline Color",
+      current: AppSettings.redlineColor,
+      action: #selector(setRedlineColor(_:))
+    ))
+
+    settingsMenu.addItem(.separator())
+    settingsMenu.addItem(NSMenuItem(title: "Reset Icon Settings", action: #selector(resetIconSettings), keyEquivalent: ""))
+
+    settings.submenu = settingsMenu
+    menu.addItem(settings)
+  }
+
+  private func sliderItem(for setting: IconSliderSetting) -> NSMenuItem {
+    let item = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    item.view = SettingsSliderRow(
+      setting: setting,
+      value: AppSettings.value(for: setting)
+    ) { [weak self] value in
+      AppSettings.setValue(value, for: setting)
+      self?.updateIcon()
+    }
+    return item
+  }
+
+  private func colorSubmenu(title: String, current: GaugeColorChoice, action: Selector) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    let submenu = NSMenu()
+    submenu.autoenablesItems = false
+    for option in GaugeColorChoice.allCases {
+      let child = NSMenuItem(title: option.menuTitle, action: action, keyEquivalent: "")
+      child.image = swatchImage(color: option.nsColor)
+      child.representedObject = option.rawValue
+      if current == option {
+        child.state = .on
+      }
+      submenu.addItem(child)
+    }
+    item.submenu = submenu
+    return item
+  }
+
+  private func setTargets(in menu: NSMenu) {
+    for item in menu.items {
+      if item.action != nil {
+        item.target = self
+      }
+      if let submenu = item.submenu {
+        setTargets(in: submenu)
+      }
+    }
+  }
+
+  private func applyIconSettingChange() {
+    updateMenu()
+    updateIcon()
+  }
+
+  @objc private func setCodexColor(_ sender: NSMenuItem) {
+    guard
+      let raw = sender.representedObject as? String,
+      let color = GaugeColorChoice(rawValue: raw)
+    else { return }
+    AppSettings.codexColor = color
+    applyIconSettingChange()
+  }
+
+  @objc private func setClaudeColor(_ sender: NSMenuItem) {
+    guard
+      let raw = sender.representedObject as? String,
+      let color = GaugeColorChoice(rawValue: raw)
+    else { return }
+    AppSettings.claudeColor = color
+    applyIconSettingChange()
+  }
+
+  @objc private func setRedlineColor(_ sender: NSMenuItem) {
+    guard
+      let raw = sender.representedObject as? String,
+      let color = GaugeColorChoice(rawValue: raw)
+    else { return }
+    AppSettings.redlineColor = color
+    applyIconSettingChange()
+  }
+
+  @objc private func resetIconSettings() {
+    AppSettings.resetIconStyle()
+    applyIconSettingChange()
   }
 
   @objc private func signIn(_ sender: NSMenuItem) {
@@ -105,10 +270,19 @@ final class StatusItemController {
 
   @objc private func refresh() {
     Task {
-      await store.refresh()
+      await store.refresh(force: true)
       updateMenu()
       updateIcon()
     }
+  }
+
+  @objc private func checkForUpdatesFromMenu() {
+    updater.checkForUpdates()
+  }
+
+  @objc private func toggleAutomaticUpdates() {
+    updater.setAutomaticallyInstallsUpdates(!updater.automaticallyInstallsUpdates)
+    updateMenu()
   }
 
   @objc private func quit() {
@@ -125,6 +299,36 @@ final class StatusItemController {
     return image
   }
 
+  private func markerImage(for window: UsageWindow, style: GaugeIconStyle) -> NSImage {
+    switch window.visualStyle {
+    case .hand:
+      dotImage(color: window.band.nsColor)
+    case .outerStar:
+      starImage(color: GaugeIconRenderer.providerColor(window.provider, style: style))
+    }
+  }
+
+  private func starImage(color: NSColor) -> NSImage {
+    let image = NSImage(size: NSSize(width: 10, height: 10))
+    image.lockFocus()
+    let center = NSPoint(x: 5, y: 5)
+    let vertices: [(CGFloat, CGFloat)] = [
+      (0, 4.3), (1.15, 1.15), (4.3, 0), (1.15, -1.15),
+      (0, -4.3), (-1.15, -1.15), (-4.3, 0), (-1.15, 1.15)
+    ]
+    let path = NSBezierPath()
+    path.move(to: NSPoint(x: center.x + vertices[0].0, y: center.y + vertices[0].1))
+    for vertex in vertices.dropFirst() {
+      path.line(to: NSPoint(x: center.x + vertex.0, y: center.y + vertex.1))
+    }
+    path.close()
+    color.setFill()
+    path.fill()
+    image.unlockFocus()
+    image.isTemplate = false
+    return image
+  }
+
   private func swatchImage(color: NSColor) -> NSImage {
     let image = NSImage(size: NSSize(width: 11, height: 11))
     image.lockFocus()
@@ -133,5 +337,11 @@ final class StatusItemController {
     image.unlockFocus()
     image.isTemplate = false
     return image
+  }
+
+  private func addDisabledItem(_ title: String, to menu: NSMenu) {
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    item.isEnabled = false
+    menu.addItem(item)
   }
 }

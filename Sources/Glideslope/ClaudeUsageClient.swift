@@ -16,6 +16,19 @@ import Foundation
 /// it reports a degraded state and waits for Claude Code to refresh it.
 struct ClaudeUsageClient: Sendable {
   private static let keychainService = "Claude Code-credentials"
+  private static let session: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.httpCookieStorage = nil
+    configuration.urlCredentialStorage = nil
+    configuration.urlCache = nil
+    configuration.httpAdditionalHeaders = nil
+    configuration.httpShouldSetCookies = false
+    configuration.httpCookieAcceptPolicy = .never
+    configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    configuration.timeoutIntervalForRequest = 15
+    configuration.timeoutIntervalForResource = 20
+    return URLSession(configuration: configuration)
+  }()
   private var usageURL: URL {
     let raw = ProcessInfo.processInfo.environment["GLIDESLOPE_CLAUDE_USAGE_URL"]
       ?? "https://api.anthropic.com/api/oauth/usage"
@@ -39,14 +52,30 @@ struct ClaudeUsageClient: Sendable {
     do {
       let payload = try await fetchPayload(token: credential.accessToken)
       let windows = ClaudeUsageParser.windows(from: payload, now: now)
-      guard !windows.isEmpty else {
-        return .failure(.claude, source: "error", error: "no usage windows in response")
+      guard ClaudeUsageParser.hasCompleteBroadWindows(windows) else {
+        // Do not treat a partial 200 as authoritative. Reconciliation will keep
+        // the prior reset-valid snapshot, while a complete later response can
+        // still clear scoped limits that are genuinely no longer active.
+        return .failure(.claude, source: "error", error: "incomplete usage windows in response")
       }
       return ProviderResult(provider: .claude, ok: true, source: "live", error: nil, windows: windows)
     } catch {
       let needsAuth: Bool
-      if case ClaudeError.fetchFailed(let code) = error, code == 401 { needsAuth = true } else { needsAuth = false }
-      return .failure(.claude, source: "error", error: ClaudeUsageClient.describe(error), needsAuth: needsAuth)
+      let retryAfter: TimeInterval?
+      if case ClaudeError.fetchFailed(let code, let wait) = error {
+        needsAuth = code == 401
+        retryAfter = wait
+      } else {
+        needsAuth = false
+        retryAfter = nil
+      }
+      return .failure(
+        .claude,
+        source: "error",
+        error: ClaudeUsageClient.describe(error),
+        needsAuth: needsAuth,
+        retryAfterSeconds: retryAfter
+      )
     }
   }
 
@@ -58,12 +87,12 @@ struct ClaudeUsageClient: Sendable {
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     request.setValue("Glideslope/0.3", forHTTPHeaderField: "User-Agent")
 
-    let (data, response) = try await URLSession.shared.data(for: request)
+    let (data, response) = try await Self.session.data(for: request)
     guard let http = response as? HTTPURLResponse else {
-      throw ClaudeError.fetchFailed(nil)
+      throw ClaudeError.fetchFailed(nil, retryAfter: nil)
     }
     guard (200..<300).contains(http.statusCode) else {
-      throw ClaudeError.fetchFailed(http.statusCode)
+      throw ClaudeError.fetchFailed(http.statusCode, retryAfter: ClaudeUsageClient.retryAfter(from: http))
     }
     guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
       throw ClaudeError.malformed
@@ -164,15 +193,40 @@ struct ClaudeUsageClient: Sendable {
     switch error {
     case ClaudeError.notSignedIn:
       return "not signed in to Claude Code"
-    case let ClaudeError.fetchFailed(code?):
-      return code == 401 ? "token rejected — open Claude Code to refresh" : "usage fetch failed (HTTP \(code))"
-    case ClaudeError.fetchFailed(nil):
+    case let ClaudeError.fetchFailed(code?, retryAfter):
+      if code == 401 {
+        return "token rejected — open Claude Code to refresh"
+      }
+      if code == 429, let retryAfter {
+        return "usage fetch rate-limited; retry after \(ProviderResult.compactDuration(retryAfter))"
+      }
+      return "usage fetch failed (HTTP \(code))"
+    case ClaudeError.fetchFailed(nil, _):
       return "usage fetch failed"
     case ClaudeError.malformed:
       return "unexpected credential/usage format"
     default:
       return String(describing: error)
     }
+  }
+
+  private static func retryAfter(from response: HTTPURLResponse) -> TimeInterval? {
+    guard let raw = response.value(forHTTPHeaderField: "Retry-After")?
+      .trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+      return nil
+    }
+    if let seconds = Double(raw) {
+      return max(0, seconds)
+    }
+
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+    guard let date = formatter.date(from: raw) else {
+      return nil
+    }
+    return max(0, date.timeIntervalSinceNow)
   }
 }
 
@@ -183,13 +237,13 @@ struct ClaudeCredential: Sendable {
 
 enum ClaudeError: Error {
   case notSignedIn
-  case fetchFailed(Int?)
+  case fetchFailed(Int?, retryAfter: TimeInterval?)
   case malformed
 }
 
-/// Decoder for Anthropic's OAuth usage payload, pinned to the shape Astra reads
-/// in `providers/cli.py`: `five_hour` / `seven_day` windows, each carrying a
-/// `utilization` percent (0–100) and an ISO-8601 `resets_at`.
+/// Decoder for Anthropic's OAuth usage payload. The broad plan windows live in
+/// `five_hour` / `seven_day`; extra model-scoped limits such as Fable live in
+/// `limits[]`.
 enum ClaudeUsageParser {
   static func windows(from payload: [String: Any], now: Date) -> [UsageWindow] {
     var windows: [UsageWindow] = []
@@ -199,7 +253,15 @@ enum ClaudeUsageParser {
     if let slow = window(.slow, dict: payload["seven_day"], defaultDuration: 7 * 24 * 3600, now: now) {
       windows.append(slow)
     }
+    if let fable = fableWindow(from: payload, now: now) {
+      windows.append(fable)
+    }
     return windows
+  }
+
+  static func hasCompleteBroadWindows(_ windows: [UsageWindow]) -> Bool {
+    windows.contains { $0.scope == nil && $0.speed == .fast }
+      && windows.contains { $0.scope == nil && $0.speed == .slow }
   }
 
   private static func window(_ speed: WindowSpeed, dict: Any?, defaultDuration: TimeInterval, now: Date) -> UsageWindow? {
@@ -215,6 +277,40 @@ enum ClaudeUsageParser {
       limitWindowSeconds: defaultDuration,
       now: now
     )
+  }
+
+  private static func fableWindow(from payload: [String: Any], now: Date) -> UsageWindow? {
+    guard let limits = payload["limits"] as? [[String: Any]] else {
+      return nil
+    }
+
+    for limit in limits {
+      guard
+        string(limit["group"]) == "weekly",
+        string(limit["kind"]) == "weekly_scoped",
+        bool(limit["is_active"]) == true,
+        modelName(from: limit)?.localizedCaseInsensitiveCompare("Fable") == .orderedSame,
+        let usedPercent = numeric(limit["percent"])
+      else {
+        continue
+      }
+
+      let resetAt = resetDate(from: limit)
+        ?? (payload["seven_day"] as? [String: Any]).flatMap(resetDate(from:))
+        ?? now.addingTimeInterval(7 * 24 * 3600)
+      return PressureMath.window(
+        provider: .claude,
+        speed: .slow,
+        usedPercent: usedPercent,
+        resetAt: resetAt,
+        limitWindowSeconds: 7 * 24 * 3600,
+        now: now,
+        scope: .fable,
+        visualStyle: .outerStar
+      )
+    }
+
+    return nil
   }
 
   private static func usedPercent(from dict: [String: Any]) -> Double? {
@@ -246,6 +342,33 @@ enum ClaudeUsageParser {
     if let int = value as? Int { return Double(int) }
     if let string = value as? String { return Double(string) }
     return nil
+  }
+
+  private static func string(_ value: Any?) -> String? {
+    (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private static func bool(_ value: Any?) -> Bool? {
+    if let bool = value as? Bool { return bool }
+    if let int = value as? Int { return int != 0 }
+    if let string = value as? String {
+      switch string.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+      case "true", "yes", "1": return true
+      case "false", "no", "0": return false
+      default: return nil
+      }
+    }
+    return nil
+  }
+
+  private static func modelName(from dict: [String: Any]) -> String? {
+    guard let scope = dict["scope"] as? [String: Any] else {
+      return nil
+    }
+    if let model = scope["model"] as? [String: Any] {
+      return string(model["display_name"]) ?? string(model["name"])
+    }
+    return string(scope["model"])
   }
 
   private static func parseISO(_ string: String) -> Date? {

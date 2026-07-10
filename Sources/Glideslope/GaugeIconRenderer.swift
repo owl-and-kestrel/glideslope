@@ -12,10 +12,11 @@ import AppKit
 ///   • window    -> radius + depth: the fast (~5h) window is a long hand drawn
 ///                  first (background); the slow (weekly) window is a shorter
 ///                  hand drawn last (foreground).
+///   • scope     -> marker: scoped model limits such as Claude Fable draw as
+///                  four-point stars on the outer edge, not as extra hands.
 enum GaugeIconRenderer {
   static let size = NSSize(width: 22, height: 22)
   private static let circleRadius: CGFloat = 10.5
-  private static let dotRadius: CGFloat = 8.6
   private static let dotCount = 16
   private static let dialStart: CGFloat = 230
   private static let dialSweep: CGFloat = -280
@@ -23,7 +24,7 @@ enum GaugeIconRenderer {
   private static let redlineFraction: CGFloat = 0.78
 
   @MainActor
-  static func image(status: UsageStatus, scale: CGFloat = 1) -> NSImage {
+  static func image(status: UsageStatus, scale: CGFloat = 1, style: GaugeIconStyle = AppSettings.iconStyle) -> NSImage {
     let center = NSPoint(x: size.width / 2, y: size.height / 2)
     let image = NSImage(size: NSSize(width: size.width * scale, height: size.height * scale))
 
@@ -37,20 +38,30 @@ enum GaugeIconRenderer {
     NSRect(origin: .zero, size: size).fill()
 
     drawFace(center: center)
-    drawScale(center: center)
+    drawScale(center: center, style: style)
 
     // Draw long (slow) lines first, then short (fast) lines on top, so a short
     // outer line is never hidden under a long line when their angles align.
     // Within each band, the most-constrained (lowest pressure) draws last.
-    let ordered = status.windows.sorted { a, b in
+    let hands = status.windows.filter { $0.visualStyle == .hand }.sorted { a, b in
       if a.speed != b.speed { return a.speed == .slow }
       return a.pressurePercent > b.pressurePercent
     }
-    for window in ordered {
-      drawHand(center: center, window: window)
+    for window in hands {
+      drawHand(center: center, window: window, style: style)
     }
 
-    drawHub(center: center)
+    // Scoped limits are sparse overlays. Draw them after hands so a present
+    // model-specific limit is visible without pretending it is another window
+    // hand in the two-band system.
+    let markers = status.windows.filter { $0.visualStyle == .outerStar }.sorted {
+      $0.pressurePercent > $1.pressurePercent
+    }
+    for window in markers {
+      drawOuterStar(center: center, window: window, style: style)
+    }
+
+    drawHub(center: center, style: style)
 
     image.unlockFocus()
     image.isTemplate = false
@@ -65,37 +76,36 @@ enum GaugeIconRenderer {
     NSBezierPath(ovalIn: rect).fill()
   }
 
-  private static func drawScale(center: NSPoint) {
+  private static func drawScale(center: NSPoint, style: GaugeIconStyle) {
     // Small white dots form the scale up to the redline — kept subtle so the
     // hands dominate.
-    let dotR: CGFloat = 0.62
+    let dotR = style.scaleDotSize
     NSColor(calibratedWhite: 0.90, alpha: 0.8).setFill()
     for index in 0..<dotCount {
       let fraction = CGFloat(index) / CGFloat(dotCount - 1)
       if fraction >= redlineFraction { continue }
       let angle = (dialStart + dialSweep * fraction) * .pi / 180
-      let point = NSPoint(x: center.x + cos(angle) * dotRadius, y: center.y + sin(angle) * dotRadius)
+      let point = NSPoint(x: center.x + cos(angle) * style.scaleRadius, y: center.y + sin(angle) * style.scaleRadius)
       NSBezierPath(ovalIn: NSRect(x: point.x - dotR, y: point.y - dotR, width: dotR * 2, height: dotR * 2)).fill()
     }
 
     // The redline is a solid bright-red arc over the hot end, not dots.
     let redStart = dialStart + dialSweep * redlineFraction
     let redEnd = dialStart + dialSweep
-    let red = NSColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)
-    red.setStroke()
+    style.redlineColor.setStroke()
     let arc = NSBezierPath()
-    arc.lineWidth = 2.3
+    arc.lineWidth = style.redlineWidth
     arc.lineCapStyle = .round
-    arc.appendArc(withCenter: center, radius: dotRadius, startAngle: redStart, endAngle: redEnd, clockwise: true)
+    arc.appendArc(withCenter: center, radius: style.scaleRadius, startAngle: redStart, endAngle: redEnd, clockwise: true)
     arc.stroke()
   }
 
   // MARK: - Hands
 
-  // Dots sit at `dotRadius` = 8.6; the circle face ends at `circleRadius` = 10.5.
+  // The circle face ends at `circleRadius` = 10.5.
   // The two window kinds occupy different radial bands so they never swallow
   // each other when their angles align.
-  private static func drawHand(center: NSPoint, window: UsageWindow) {
+  private static func drawHand(center: NSPoint, window: UsageWindow, style: GaugeIconStyle) {
     let radians = angle(for: window) * .pi / 180
     let dx = cos(radians)
     let dy = sin(radians)
@@ -113,15 +123,15 @@ enum GaugeIconRenderer {
     case .slow:
       // Long window (weekly): a long line from a short tail through the hub out
       // past the tick marks.
-      line.move(to: point(-1.2))
-      line.line(to: point(9.4))
-      colorWidth = 1.9
+      line.move(to: point(style.weeklyHandRadius - style.weeklyHandLength))
+      line.line(to: point(style.weeklyHandRadius))
+      colorWidth = style.weeklyHandWidth
     case .fast:
       // Short window (5h): a short bold line in the outer band, from the edge
       // inward past the tick marks — an emphasized tick.
-      line.move(to: point(10.3))
-      line.line(to: point(7.5))
-      colorWidth = 2.1
+      line.move(to: point(style.fastHandRadius))
+      line.line(to: point(style.fastHandRadius - style.fastHandLength))
+      colorWidth = style.fastHandWidth
     }
     line.lineCapStyle = .round
 
@@ -129,15 +139,68 @@ enum GaugeIconRenderer {
     NSColor.black.setStroke()
     line.lineWidth = colorWidth + 0.8
     line.stroke()
-    providerColor(window.provider).setStroke()
+    providerColor(window.provider, style: style).setStroke()
     line.lineWidth = colorWidth
     line.stroke()
   }
 
-  private static func drawHub(center: NSPoint) {
-    let r: CGFloat = 0.9
+  private static func drawOuterStar(center: NSPoint, window: UsageWindow, style: GaugeIconStyle) {
+    let radians = angle(for: window) * .pi / 180
+    let dx = cos(radians)
+    let dy = sin(radians)
+    let nx = -dy
+    let ny = dx
+    let outer = style.fableStarSize
+    let inner = style.fableStarSize * 0.35
+    let starCenter = NSPoint(
+      x: center.x + dx * style.fableStarRadius,
+      y: center.y + dy * style.fableStarRadius
+    )
+
+    // Four points: outward/inward along the radial axis, and two tangential
+    // points. Alternating inner vertices keep it recognizably star-shaped at
+    // 22px rather than collapsing into a plain diamond.
+    let vertices: [(CGFloat, CGFloat)] = [
+      (outer, 0),
+      (inner, inner),
+      (0, outer),
+      (-inner, inner),
+      (-outer, 0),
+      (-inner, -inner),
+      (0, -outer),
+      (inner, -inner)
+    ]
+
+    func point(radial: CGFloat, tangent: CGFloat) -> NSPoint {
+      NSPoint(
+        x: starCenter.x + dx * radial + nx * tangent,
+        y: starCenter.y + dy * radial + ny * tangent
+      )
+    }
+
+    let star = NSBezierPath()
+    let first = vertices[0]
+    star.move(to: point(radial: first.0, tangent: first.1))
+    for vertex in vertices.dropFirst() {
+      star.line(to: point(radial: vertex.0, tangent: vertex.1))
+    }
+    star.close()
+
+    NSColor.black.setStroke()
+    star.lineJoinStyle = .round
+    star.lineWidth = 0.45
+    providerColor(window.provider, style: style).setFill()
+    star.fill()
+    star.stroke()
+  }
+
+  private static func drawHub(center: NSPoint, style: GaugeIconStyle) {
+    let r = style.hubSize
+    guard r > 0 else {
+      return
+    }
     let cap = NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
-    NSColor(calibratedWhite: 0.97, alpha: 1).setFill()
+    NSColor.black.setFill()
     cap.fill()
   }
 
@@ -145,12 +208,12 @@ enum GaugeIconRenderer {
 
   /// Provider accent for the hands and the dropdown swatch. Tuned to read as
   /// vivid teal / coral on the dark face, and distinct from each other.
-  static func providerColor(_ provider: Provider) -> NSColor {
+  static func providerColor(_ provider: Provider, style: GaugeIconStyle = AppSettings.iconStyle) -> NSColor {
     switch provider {
     case .codex:
-      NSColor(calibratedRed: 0.16, green: 0.82, blue: 0.84, alpha: 1)
+      style.codexColor
     case .claude:
-      NSColor(calibratedRed: 1.00, green: 0.55, blue: 0.34, alpha: 1)
+      style.claudeColor
     }
   }
 

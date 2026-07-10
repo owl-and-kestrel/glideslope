@@ -2,15 +2,16 @@
 
 Glideslope is a tiny macOS menu bar gauge for **Codex and Claude Code** usage pressure.
 
-The dial is a dark circle with a dotted gauge scale and up to four hands, drawn as bold lines in **separate radial bands** (so they never swallow each other when their angles align): the long (weekly) window is a long line from the hub out past the tick marks, and the short (~5h) window is a short line in the outer band crossing the ticks (an emphasized tick). They are vivid against the dark face (with only a thin dark edge for separation) — the most dominant element. The scale recedes to small white dots; the only colored part of the scale is a **solid pure-red (`#FF0000`) redline arc on the hot end** — the side that actually matters.
+The dial is a dark circle with a dotted gauge scale, up to four hands, and optional scoped-limit markers. Hands are drawn as bold lines in **separate radial bands** (so they never swallow each other when their angles align): the long (weekly) window is a long line from the hub out past the tick marks, and the short (~5h) window is a short line in the outer band crossing the ticks (an emphasized tick). They are vivid against the dark face (with only a thin dark edge for separation) — the most dominant element. The scale recedes to small white dots; the only colored part of the scale is a **solid pure-red (`#FF0000`) redline arc on the hot end** — the side that actually matters.
 
 Hands are deconflicted on three axes:
 
 - **provider → color:** Codex is teal, Claude is coral.
-- **window → length:** the fast (~5h) window is a long hand; the slow (weekly) window is a short hand.
+- **window → length:** the slow (weekly) window is a long hand; the fast (~5h) window is a short outer-band hand.
+- **scoped limit → marker:** active Claude Fable weekly usage appears as a four-pointed coral star on the outer edge. It follows the latest fresh Anthropic reading, and disappears when a later successful response no longer includes that active scoped limit.
 - **pressure → depth:** the most-constrained (highest-pressure) window draws on top, so the hand that matters most is in the foreground.
 
-So a long teal hand is Codex's 5-hour window; a short coral hand is Claude's weekly window, and so on.
+So a long teal hand is Codex's weekly window; a short coral hand is Claude's 5-hour window; a coral star is Claude's active Fable scoped weekly limit.
 
 The hands are pace-relative consumption meters. A hand pegged left means `0%` consumed, centered means exactly on the expected reset pace, and pegged right means `100%` consumed / `0%` remaining.
 
@@ -22,12 +23,20 @@ The menu groups windows by provider and uses a simple pressure color per window:
 - green: good / on pace
 - red: low / too hot / usage is ahead of pace
 
+The **Icon Settings** submenu lets you tune the menu-bar glyph without editing
+code. Slider controls persist local point values for Fable star size/radius,
+5-hour hand length/width/radius, weekly hand length/width/radius, scale dot
+size/radius, redline width, and hub dot size. Color choices for Codex, Claude,
+and the redline are persisted alongside them. Radius sliders are intentionally
+permissive: elements can be pushed off the dial and will only stop when the icon
+canvas itself clips them.
+
 The native app:
 
 - reads local Codex auth from `~/.codex/auth.json` and calls the ChatGPT usage endpoint Codex uses;
-- gets a Claude Code OAuth token and calls Anthropic's subscription usage endpoint (`/api/oauth/usage`), mapping the `five_hour` / `seven_day` windows onto the fast/slow hands.
+- gets a Claude Code OAuth token and calls Anthropic's subscription usage endpoint (`/api/oauth/usage`), mapping the `five_hour` / `seven_day` windows onto the fast/slow hands and active Fable `limits[]` usage onto the outer-edge star.
 
-It never prints or stores either token. Each provider is polled independently, so one being unavailable never blocks the other — an unavailable provider simply drops its hands and explains why in the dropdown.
+It never prints or stores either token. Each provider is polled independently, so one being unavailable never blocks the other. Glideslope persists only derived last-known usage (percentages, reset times, and capture time) under Application Support. A credential or endpoint failure keeps still-valid hands visible with their age and the current recovery warning; each cached hand retires at its own reset boundary. Cached pressure is recalculated against the current clock instead of freezing at capture time.
 
 ### Claude Code credential
 
@@ -46,9 +55,19 @@ printf '%s\n' '<token>' > ~/.glideslope/claude-token
 chmod 600 ~/.glideslope/claude-token
 ```
 
-When relying only on the Keychain, an expired access token degrades to `token expired — open Claude Code to refresh` until Claude Code renews it. The usage URL can be overridden with `GLIDESLOPE_CLAUDE_USAGE_URL`.
+When relying only on the Keychain, an expired access token degrades to `token expired — open Claude Code to refresh` until Claude Code renews it. The usage URL can be overridden with `GLIDESLOPE_CLAUDE_USAGE_URL`. Manual Refresh forces a Claude usage poll; the background loop polls Claude gently, respects server `Retry-After` cooldowns, coalesces overlapping refreshes, and labels fallback data with cache age.
 
-> Auto-refresh of the Claude token (so the hand stays live without re-opening Claude Code) is a deliberate follow-up — it requires writing the rotated credential back to the shared Keychain item, which we want to validate carefully before shipping.
+Claude Desktop's always-populated plan display is not a supported alternate source. Desktop uses its own web session and organization usage route, while Glideslope uses the separate Claude Code OAuth credential. Glideslope deliberately does not borrow Desktop cookies or private app state.
+
+> Glideslope intentionally does not refresh or rewrite Claude Code's shared Keychain item. The durable credential path is a user-created `claude setup-token`; the durable display path is the explicitly aged, reset-bounded last-known cache.
+
+### Release updates
+
+Glideslope `0.4.0` (build `8`) embeds Sparkle `2.9.4` and checks the signed feed at `https://updates.owlandkestrel.com/glideslope/stable/appcast.xml`. Release builds check and install updates automatically by default. **Install Updates Automatically** opts out of installation only—scheduled checks continue—and **Check for Updates…** remains available. Debug builds never update themselves automatically. Update traffic contains no installation identifier, account data, usage readings, or Codex/Claude credentials.
+
+The feed and immutable, content-addressed archives live in the dedicated Cloudflare R2 bucket `ok-release-artifacts`; Plumage and O+K Trust are not feed dependencies. Publication uploads and reads back the archive first, advances and verifies the signed appcast last, then records secondary provenance in O+K Trust and emits a deduplicated `product.release_available` event to the `glideslope-updates` Chirp channel. Installed apps never poll Chirp or contain a Chirp credential.
+
+The technical alpha is ad-hoc signed rather than Developer ID signed/notarized, so its first installation may require **System Settings → Privacy & Security → Open Anyway**. Pre-Sparkle users need one manual bridge installation; later automatic releases can add Developer ID signing through the same feed while preserving the bundle id and Sparkle Ed25519 key. See [`docs/releasing.md`](docs/releasing.md).
 
 ### Preview
 
@@ -114,7 +133,8 @@ CLI fallback state is stored at:
 
 ```sh
 npm test
-swift build
+npm run test:swift
+npm run build:native
 ./script/build_and_run.sh --verify
 ```
 

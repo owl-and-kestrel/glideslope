@@ -5,3 +5,5 @@ coverage/
 .build/
 dist/
 release/
+.ok-api-key.txt
+.wrangler/

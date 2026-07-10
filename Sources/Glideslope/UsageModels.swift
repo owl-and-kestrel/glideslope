@@ -29,6 +29,19 @@ enum WindowSpeed: String, Codable, Sendable {
   }
 }
 
+enum UsageVisualStyle: String, Codable, Sendable {
+  case hand
+  case outerStar
+}
+
+struct UsageScope: Codable, Hashable, Sendable {
+  let kind: String
+  let key: String
+  let displayName: String
+
+  static let fable = UsageScope(kind: "model", key: "fable", displayName: "Fable")
+}
+
 enum PressureBand: String, Codable, Sendable {
   case high
   case good
@@ -62,6 +75,8 @@ enum PressureBand: String, Codable, Sendable {
 struct UsageWindow: Codable, Identifiable, Sendable {
   let provider: Provider
   let speed: WindowSpeed
+  let scope: UsageScope?
+  let visualStyle: UsageVisualStyle
   let usedPercent: Double
   let remainingPercent: Double
   let expectedRemainingPercent: Double
@@ -69,13 +84,16 @@ struct UsageWindow: Codable, Identifiable, Sendable {
   let resetAt: Date
   let limitWindowSeconds: TimeInterval
 
-  var id: String { "\(provider.rawValue)_\(speed.rawValue)" }
+  var id: String {
+    let scopeKey = scope.map { "_\($0.kind)_\($0.key)" } ?? ""
+    return "\(provider.rawValue)_\(speed.rawValue)\(scopeKey)"
+  }
 
-  /// Short label for the dropdown ("5h", "Weekly").
-  var label: String { speed.displayName }
+  /// Short label for the dropdown ("5h", "Weekly", "Fable").
+  var label: String { scope?.displayName ?? speed.displayName }
 
   /// Provider-qualified label for the menu-bar summary ("Codex 5h").
-  var qualifiedLabel: String { "\(provider.displayName) \(speed.displayName)" }
+  var qualifiedLabel: String { "\(provider.displayName) \(label)" }
 
   var band: PressureBand {
     PressureBand(pressurePercent: pressurePercent)
@@ -102,9 +120,62 @@ struct ProviderResult: Sendable {
   /// True when the failure is a credential problem the user can fix by signing
   /// in (vs. a transient network/rate-limit error).
   var needsAuth: Bool = false
+  /// Age of the live reading being reused for a cached result, when known.
+  var cacheAgeSeconds: TimeInterval? = nil
+  /// Server-provided retry delay for transient failures such as HTTP 429.
+  var retryAfterSeconds: TimeInterval? = nil
 
-  static func failure(_ provider: Provider, source: String, error: String, needsAuth: Bool = false) -> ProviderResult {
-    ProviderResult(provider: provider, ok: false, source: source, error: error, windows: [], needsAuth: needsAuth)
+  var cacheAgeDisplay: String? {
+    cacheAgeSeconds.map(Self.compactDuration)
+  }
+
+  var sourceLabel: String? {
+    guard source == "cached" else {
+      return nil
+    }
+    if let cacheAgeDisplay {
+      return "cached \(cacheAgeDisplay)"
+    }
+    return "cached"
+  }
+
+  static func failure(
+    _ provider: Provider,
+    source: String,
+    error: String,
+    needsAuth: Bool = false,
+    cacheAgeSeconds: TimeInterval? = nil,
+    retryAfterSeconds: TimeInterval? = nil
+  ) -> ProviderResult {
+    ProviderResult(
+      provider: provider,
+      ok: false,
+      source: source,
+      error: error,
+      windows: [],
+      needsAuth: needsAuth,
+      cacheAgeSeconds: cacheAgeSeconds,
+      retryAfterSeconds: retryAfterSeconds
+    )
+  }
+
+  static func compactDuration(_ seconds: TimeInterval) -> String {
+    let wholeSeconds = max(0, Int(seconds.rounded()))
+    if wholeSeconds < 90 {
+      return "\(wholeSeconds)s"
+    }
+
+    let minutes = max(1, wholeSeconds / 60)
+    if minutes < 90 {
+      return "\(minutes)m"
+    }
+
+    let hours = max(1, minutes / 60)
+    if hours < 48 {
+      return "\(hours)h"
+    }
+
+    return "\(max(1, hours / 24))d"
   }
 }
 
@@ -123,7 +194,7 @@ struct UsageStatus: Sendable {
   }
 
   func window(provider: Provider, speed: WindowSpeed) -> UsageWindow? {
-    windows.first { $0.provider == provider && $0.speed == speed }
+    windows.first { $0.provider == provider && $0.speed == speed && $0.scope == nil }
   }
 
   /// The most constrained window across every provider — the one with the
@@ -136,7 +207,8 @@ struct UsageStatus: Sendable {
     guard let worst else {
       return "Glideslope: usage unavailable"
     }
-    return "\(worst.qualifiedLabel) \(worst.pressureDisplay) \(worst.band.label.lowercased())"
+    let sourceSuffix = result(for: worst.provider)?.sourceLabel.map { " (\($0))" } ?? ""
+    return "\(worst.qualifiedLabel) \(worst.pressureDisplay) \(worst.band.label.lowercased())\(sourceSuffix)"
   }
 }
 
@@ -149,7 +221,9 @@ enum PressureMath {
     usedPercent: Double,
     resetAt: Date,
     limitWindowSeconds: TimeInterval,
-    now: Date
+    now: Date,
+    scope: UsageScope? = nil,
+    visualStyle: UsageVisualStyle = .hand
   ) -> UsageWindow {
     let used = min(100, max(0, usedPercent))
     let secondsRemaining = max(0, resetAt.timeIntervalSince(now))
@@ -161,6 +235,8 @@ enum PressureMath {
     return UsageWindow(
       provider: provider,
       speed: speed,
+      scope: scope,
+      visualStyle: visualStyle,
       usedPercent: used,
       remainingPercent: actualRemaining * 100,
       expectedRemainingPercent: expectedRemaining * 100,

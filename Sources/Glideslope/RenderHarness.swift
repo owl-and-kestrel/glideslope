@@ -1,8 +1,8 @@
 import AppKit
 
-/// Developer-only preview. Run `Glideslope --render <out.png>` to rasterize the
-/// dial against light and dark backgrounds at several usage scenarios, without
-/// touching the menu bar or any live credentials.
+/// Developer-only previews. `--render` produces a labeled QA sheet;
+/// `--render-plate` produces the square, text-free public product plate. Neither
+/// mode touches the menu bar or any live credentials.
 @MainActor
 enum RenderHarness {
   static func run(outputPath: String) {
@@ -62,8 +62,47 @@ enum RenderHarness {
     }
     sheet.unlockFocus()
 
+    writePNG(sheet, outputPath: outputPath)
+  }
+
+  static func runPlate(outputPath: String) {
+    let canvasSize = NSSize(width: 1024, height: 1024)
+    let iconScale: CGFloat = 40
+    let iconSize = NSSize(
+      width: GaugeIconRenderer.size.width * iconScale,
+      height: GaugeIconRenderer.size.height * iconScale
+    )
+    let plate = NSImage(size: canvasSize)
+    let status = sample(codexFast: 28, codexSlow: 55, claudeFast: 74, claudeSlow: 18)
+
+    plate.lockFocus()
+    NSGraphicsContext.current?.imageInterpolation = .none
+    NSColor(calibratedWhite: 0.96, alpha: 1).setFill()
+    NSRect(origin: .zero, size: canvasSize).fill()
+
+    var icon = NSImage()
+    NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
+      icon = GaugeIconRenderer.image(status: status, scale: iconScale)
+    }
+    icon.draw(
+      in: NSRect(
+        x: (canvasSize.width - iconSize.width) / 2,
+        y: (canvasSize.height - iconSize.height) / 2,
+        width: iconSize.width,
+        height: iconSize.height
+      ),
+      from: .zero,
+      operation: .sourceOver,
+      fraction: 1
+    )
+    plate.unlockFocus()
+
+    writePNG(plate, outputPath: outputPath)
+  }
+
+  private static func writePNG(_ image: NSImage, outputPath: String) {
     guard
-      let tiff = sheet.tiffRepresentation,
+      let tiff = image.tiffRepresentation,
       let rep = NSBitmapImageRep(data: tiff),
       let png = rep.representation(using: .png, properties: [:])
     else {

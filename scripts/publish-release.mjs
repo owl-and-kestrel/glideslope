@@ -73,12 +73,6 @@ if (feedURL.origin !== updateOrigin.origin || feedURL.pathname !== expectedFeedP
 const artifactKey = artifactURL.pathname.slice(1);
 const appcastKey = feedURL.pathname.slice(1);
 const dedupeKey = `glideslope:${channel}:${version}:${build}:${zipSha256}`;
-const trustPayload = {
-  sourceSlug: "owl-and-kestrel", sourceName: "Owl + Kestrel", verifiedLabel: "Owl + Kestrel Official",
-  homepageUrl: "https://owlandkestrel.com", productSlug: "glideslope", productName: "Glideslope",
-  productSummary: "Native macOS usage-pressure gauge for Codex and Claude Code.", channel, version,
-  artifactUrl: artifact.url, artifactSha256: zipSha256, manifestStatus: "published"
-};
 const chirpPayload = {
   channel: chirpChannel, kind: "event", subtype: "product.release_available",
   body: `Glideslope ${version} (${build}) is available. ${payload.downloadPageUrl}`,
@@ -88,17 +82,22 @@ const chirpPayload = {
 
 const plan = { mode: publish ? "publish" : "dry-run", version, build, channel, bucket, artifactKey, appcastKey,
   artifactSha256: zipSha256, appcastSha256, manifestSignatureVerified: decoded.signatureVerified,
-  publicationOrder: ["verify signatures", "upload/read back immutable ZIP", "upload/read back appcast", "publish Trust", "announce Chirp"],
-  trustPayload, chirpPayload, source: payload.source };
+  releaseEndpoint: new URL("/api/admin/releases", okOrigin).href,
+  publicationOrder: ["verify signatures", "upload/read back immutable ZIP", "upload/read back appcast", "publish Release/Trust ledger", "announce Chirp"],
+  chirpPayload, source: payload.source };
 if (!publish) {
   process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
   process.exit(0);
 }
 
 // Resolve every late dependency before the first remote write.
-const trustKey = await credential("GLIDESLOPE_OK_API_KEY", "GLIDESLOPE_OK_API_KEY_FILE", path.join(root, ".ok-api-key.txt"));
+const releaseKey = await credential(
+  "GLIDESLOPE_RELEASE_API_KEY",
+  "GLIDESLOPE_RELEASE_API_KEY_FILE",
+  path.join(os.homedir(), ".config/owl-and-kestrel/secrets/glideslope-release-api-key.txt")
+);
 const chirpKey = await credential("GLIDESLOPE_CHIRP_API_KEY", "GLIDESLOPE_CHIRP_API_KEY_FILE");
-if (!trustKey) throw new Error("Set GLIDESLOPE_OK_API_KEY or GLIDESLOPE_OK_API_KEY_FILE.");
+if (!releaseKey) throw new Error("Set GLIDESLOPE_RELEASE_API_KEY or GLIDESLOPE_RELEASE_API_KEY_FILE.");
 if (!chirpKey) throw new Error("Set GLIDESLOPE_CHIRP_API_KEY or GLIDESLOPE_CHIRP_API_KEY_FILE.");
 if (!existsSync(sparkleKey) || !existsSync(signUpdate)) throw new Error("Sparkle signing key or sign_update is missing.");
 if (((await stat(sparkleKey)).mode & 0o077) !== 0) throw new Error("Sparkle private key must be mode 600.");
@@ -135,7 +134,11 @@ try {
   await rm(temporary, { recursive: true, force: true });
 }
 
-await requestJSON(new URL("/api/admin/trust/manifests", okOrigin), trustKey, { method: "POST", body: trustPayload });
+const releasePublication = await requestJSON(
+  new URL("/api/admin/releases", okOrigin),
+  releaseKey,
+  { method: "POST", body: manifestDocument }
+);
 const snapshot = await requestJSON(new URL(`/chirp/api?channel=${encodeURIComponent(chirpChannel)}&limit=100`, okOrigin), chirpKey);
 const announced = Array.isArray(snapshot.records) && snapshot.records.some((record) => record?.payload?.dedupeKey === dedupeKey);
 let chirpRecord = null;
@@ -143,7 +146,11 @@ if (!announced) {
   chirpRecord = await requestJSON(new URL("/chirp/api", okOrigin), chirpKey, { method: "POST", body: chirpPayload,
     headers: { "x-ok-agent-label": "Glideslope release publisher", "x-ok-agent-slug": "system/glideslope-release" } });
 }
-process.stdout.write(`${JSON.stringify({ ok: true, ...plan, trustPublished: true, chirpAnnounced: !announced,
+process.stdout.write(`${JSON.stringify({ ok: true, ...plan,
+  releasePublished: releasePublication.ok === true,
+  releaseStatus: releasePublication.publication?.status || null,
+  releasePublicationId: releasePublication.publication?.id || null,
+  chirpAnnounced: !announced,
   chirpDeduplicated: announced, chirpRecordId: chirpRecord?.record?.id || chirpRecord?.id || null }, null, 2)}\n`);
 
 function validateManifest(value, expected) {

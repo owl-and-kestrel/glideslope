@@ -1,8 +1,8 @@
 # Glideslope Release Channel
 
 Glideslope uses Sparkle as its executable update authority and a dedicated
-Cloudflare R2 hostname as its stable distribution boundary. Plumage, O+K Trust,
-and Chirp may describe or announce a release, but none of them is in the
+Cloudflare R2 hostname as its stable distribution boundary. Plumage, O+K
+Release/Trust, and Chirp may describe or announce a release, but none is in the
 installed app's update-fetch or verification path.
 
 Current release identity:
@@ -50,7 +50,9 @@ Bootstrap state as of 2026-07-10:
   gate for every release.
 - Chirp channel `glideslope-updates` exists and is active. Initialization
   record: `msg_2dbcb564d6a24859bebe0323be04a343`.
-- No stable Glideslope release has been announced yet.
+- Stable `0.4.0` build `8` is recorded in the O+K release ledger as publication
+  `rpub_4138f9b8-9a57-492f-b7fa-28415ef854aa`; an identical retry replays that
+  immutable receipt rather than creating another publication.
 
 ## Sparkle Trust Authority
 
@@ -96,8 +98,8 @@ canonical copy; the file is a local packaging export only.
 The Sparkle Ed25519 authority is independent of the O+K P-256 provenance key at
 `config/ok-release-p256-v1.pub.pem`. Sparkle verifies the signed appcast and
 archive before installation. O+K Trust may additionally carry a signed
-`ok.product-update.v1` envelope, but that envelope is secondary provenance and
-cannot authorize executable replacement.
+`ok.product-update.v1` envelope through the typed release ledger, but that
+envelope is secondary provenance and cannot authorize executable replacement.
 
 ## Installed-App Behavior
 
@@ -203,7 +205,7 @@ npm run release:dry-run
 Then provide mode-`0600` credential files and publish:
 
 ```sh
-GLIDESLOPE_OK_API_KEY_FILE=/secure/path/trust-release-key.txt \
+GLIDESLOPE_RELEASE_API_KEY_FILE=/secure/path/release-publisher-key.txt \
 GLIDESLOPE_CHIRP_API_KEY_FILE=/secure/path/chirp-key.txt \
   npm run release:publish
 ```
@@ -212,8 +214,9 @@ Before its first write, the publisher validates the manifest, exact appcast
 shape, content-addressed URL, ZIP length and SHA-256, both Sparkle signatures,
 all credentials, and the live feed's monotonic build. It then uploads and reads
 back the immutable archive, publishes and reads back the appcast, and only then
-publishes Trust and Chirp. A retry accepts an identical existing object/feed but
-refuses different bytes at the same artifact key or build.
+publishes the signed envelope through O+K Release/Trust and then Chirp. A retry
+accepts an identical existing object/feed and replays the same ledger receipt,
+but refuses different bytes at the same artifact key or build.
 
 ### Manual recovery procedure
 
@@ -289,12 +292,12 @@ The complete order is an invariant:
 2. Read it back and verify SHA-256.
 3. Upload `stable/appcast.xml` last.
 4. Read it back and verify the signed feed, enclosure URL, and build.
-5. Publish O+K Trust provenance.
+5. Publish the signed envelope to O+K's append-only Release/Trust ledger.
 6. Emit the deduplicated `product.release_available` event to Chirp channel
    `glideslope-updates`.
 
-Trust is useful provenance and catalog metadata, but it is not the updater's
-source of truth. Moving auth or Trust into Plumage must not change or proxy the
+Release/Trust is useful provenance and catalog metadata, but it is not the
+updater's source of truth. Moving auth into Plumage must not change or proxy the
 feed hostname. Installed apps never poll Chirp; Chirp remains publisher-side
 fan-out for humans and operators.
 
@@ -323,11 +326,12 @@ After publication:
 - Check from the previous Sparkle-enabled version and confirm automatic update.
 - Confirm opting out of **Install Updates Automatically** preserves scheduled
   update checks.
-- Read the Trust channel and confirm version, artifact URL, and digest.
+- Read the Release/Trust channel and confirm version, artifact URL, and digest.
 - Read `glideslope-updates` and confirm exactly one release event.
 
 If a release must be withdrawn, remove or replace the mutable appcast entry and
-revoke/unpublish its Trust record. Do not point the same immutable URL or version
+revoke/unpublish its Trust projection. Keep the append-only release publication
+as historical evidence. Do not point the same immutable URL or version
 at different bytes. Publish corrected bytes under a higher build/version and a
 new content-addressed URL; installed clients must never be asked to accept a
 rollback.

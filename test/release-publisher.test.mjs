@@ -55,6 +55,9 @@ test("dry-run validates the content-addressed ZIP and appcast without leaking cr
     assert.equal(plan.mode, "dry-run");
     assert.equal(plan.build, pkg.build);
     assert.match(plan.artifactKey, new RegExp(`/v${pkg.version}/[0-9a-f]{64}/Glideslope\\.zip$`, "u"));
+    assert.equal(plan.releaseEndpoint, "https://owlandkestrel.com/api/admin/releases");
+    assert.equal(plan.publicationOrder.includes("publish Release/Trust ledger"), true);
+    assert.equal("trustPayload" in plan, false);
     assert.equal(stdout.includes("secret-one"), false);
     assert.equal(stdout.includes("secret-two"), false);
   } finally { await rm(f.directory, { recursive: true, force: true }); }

@@ -229,7 +229,12 @@ struct UsageResultCache: Sendable {
   private static func rebased(_ window: UsageWindow, now: Date) -> UsageWindow {
     PressureMath.window(
       provider: window.provider,
-      speed: window.speed,
+      // Older caches may contain a weekly Codex primary window that was
+      // serialized as `.fast`. Repair it from the provider-reported duration
+      // while rebasing instead of preserving the old positional assumption.
+      speed: window.provider == .codex
+        ? .cadence(for: window.limitWindowSeconds)
+        : window.speed,
       usedPercent: window.usedPercent,
       resetAt: window.resetAt,
       limitWindowSeconds: window.limitWindowSeconds,

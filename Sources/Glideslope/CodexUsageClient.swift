@@ -9,10 +9,7 @@ struct CodexUsageClient: Sendable {
   func result(now: Date = Date()) async -> ProviderResult {
     do {
       let payload = try await fetchPayload()
-      let windows = [
-        normalize(speed: .fast, window: payload.rateLimit.primaryWindow, now: now),
-        normalize(speed: .slow, window: payload.rateLimit.secondaryWindow, now: now)
-      ].compactMap { $0 }
+      let windows = CodexUsageParser.windows(from: payload, now: now)
       return ProviderResult(provider: .codex, ok: !windows.isEmpty, source: "live", error: nil, windows: windows)
     } catch {
       let needsAuth: Bool
@@ -51,26 +48,36 @@ struct CodexUsageClient: Sendable {
     return try JSONDecoder().decode(AuthFile.self, from: data)
   }
 
-  private func normalize(speed: WindowSpeed, window: RateLimitWindow?, now: Date) -> UsageWindow? {
-    guard let window else {
-      return nil
-    }
-    return PressureMath.window(
-      provider: .codex,
-      speed: speed,
-      usedPercent: window.usedPercent,
-      resetAt: Date(timeIntervalSince1970: window.resetAt),
-      limitWindowSeconds: window.limitWindowSeconds,
-      now: now
-    )
-  }
-
   static func describe(_ error: Error) -> String {
     switch error {
     case UsageError.missingToken: "no Codex auth (~/.codex/auth.json)"
     case UsageError.fetchFailed: "usage fetch failed"
     default: String(describing: error)
     }
+  }
+}
+
+/// Codex's `primary_window` and `secondary_window` are transport slots, not
+/// stable cadence names. Current plans may put a weekly-only limit in the
+/// primary slot, so classify each window from its own reported duration.
+enum CodexUsageParser {
+  static func windows(from payload: UsagePayload, now: Date) -> [UsageWindow] {
+    [payload.rateLimit.primaryWindow, payload.rateLimit.secondaryWindow]
+      .compactMap { normalize($0, now: now) }
+  }
+
+  private static func normalize(_ window: RateLimitWindow?, now: Date) -> UsageWindow? {
+    guard let window else {
+      return nil
+    }
+    return PressureMath.window(
+      provider: .codex,
+      speed: .cadence(for: window.limitWindowSeconds),
+      usedPercent: window.usedPercent,
+      resetAt: Date(timeIntervalSince1970: window.resetAt),
+      limitWindowSeconds: window.limitWindowSeconds,
+      now: now
+    )
   }
 }
 

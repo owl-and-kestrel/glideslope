@@ -59,17 +59,20 @@ function coerceNumber(value) {
   return Number.isFinite(out) ? out : null;
 }
 
-function titleForWindow(name) {
-  if (name === "primary_window") return "5h";
-  if (name === "secondary_window") return "Weekly";
-  return name.replace(/_/g, " ");
+function titleForDuration(seconds) {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (minutes === 7 * 24 * 60) return "Weekly";
+  if (minutes % (24 * 60) === 0) return `${minutes / (24 * 60)}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
 }
 
 function normalizeWindow(name, window, nowMs = Date.now()) {
   const usedPercent = Math.max(0, Math.min(100, coerceNumber(window?.used_percent) ?? 0));
   const resetAt = coerceNumber(window?.reset_at);
-  const duration = Math.max(60, coerceNumber(window?.limit_window_seconds) ?? (name === "primary_window" ? 5 * 3600 : 7 * 24 * 3600));
-  if (!resetAt) return null;
+  const reportedDuration = coerceNumber(window?.limit_window_seconds);
+  if (!resetAt || reportedDuration === null) return null;
+  const duration = Math.max(60, reportedDuration);
 
   const resetMs = resetAt * 1000;
   const secondsRemaining = Math.max(0, (resetMs - nowMs) / 1000);
@@ -80,7 +83,7 @@ function normalizeWindow(name, window, nowMs = Date.now()) {
 
   return {
     id: name,
-    label: titleForWindow(name),
+    label: titleForDuration(duration),
     used_percent: usedPercent,
     remaining_percent: actualRemaining * 100,
     expected_remaining_percent: expectedRemaining * 100,

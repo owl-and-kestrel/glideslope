@@ -7,8 +7,8 @@ installed app's update-fetch or verification path.
 
 Current release identity:
 
-- app version: `0.4.0`
-- build: `8`
+- app version: `0.4.1`
+- build: `9`
 - bundle identifier: `com.owlandkestrel.glideslope`
 - update channel: `stable`
 - Sparkle: exact version `2.9.4`
@@ -50,7 +50,7 @@ Bootstrap state as of 2026-07-10:
   gate for every release.
 - Chirp channel `glideslope-updates` exists and is active. Initialization
   record: `msg_2dbcb564d6a24859bebe0323be04a343`.
-- Stable `0.4.0` build `8` is recorded in the O+K release ledger as publication
+- Previous stable `0.4.0` build `8` is recorded in the O+K release ledger as publication
   `rpub_4138f9b8-9a57-492f-b7fa-28415ef854aa`; an identical retry replays that
   immutable receipt rather than creating another publication.
 
@@ -280,8 +280,8 @@ xmllint --xpath 'string(//*[local-name()="version"])' \
 rm /tmp/glideslope-appcast.xml
 ```
 
-Expected values for the current release are the content-addressed `0.4.0`
-archive URL and build `8`. Stop if public readback, signature verification, URL,
+Expected values for the current release are the content-addressed `0.4.1`
+archive URL and build `9`. Stop if public readback, signature verification, URL,
 or build differs.
 
 ## Publication Ordering And Secondary Signals
@@ -313,7 +313,7 @@ digest, so retrying after an announcement failure is safe.
 
 Before publication:
 
-- Confirm version `0.4.0`, build `8`, source commit, and intended clean tree.
+- Confirm version `0.4.1`, build `9`, source commit, and intended clean tree.
 - Confirm `codesign --verify --deep --strict dist/Glideslope.app` succeeds.
 - Confirm the packaged feed and archive signatures verify.
 - Install the ZIP on a separate Mac and test launch, usage-cache recovery,

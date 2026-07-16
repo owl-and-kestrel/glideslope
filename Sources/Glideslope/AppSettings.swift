@@ -36,9 +36,9 @@ enum IconSliderSetting: String, CaseIterable, Sendable {
     switch self {
     case .fableStarSize: "Fable Star Size"
     case .fableStarRadius: "Fable Star Radius"
-    case .fastHandLength: "5h Hand Length"
-    case .fastHandWidth: "5h Hand Width"
-    case .fastHandRadius: "5h Hand Radius"
+    case .fastHandLength: "Short Hand Length"
+    case .fastHandWidth: "Short Hand Width"
+    case .fastHandRadius: "Short Hand Radius"
     case .weeklyHandLength: "Weekly Hand Length"
     case .weeklyHandWidth: "Weekly Hand Width"
     case .weeklyHandRadius: "Weekly Hand Radius"

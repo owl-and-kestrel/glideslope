@@ -141,7 +141,7 @@ final class StatusItemController {
     settingsMenu.addItem(sliderItem(for: .fableStarRadius))
 
     settingsMenu.addItem(.separator())
-    addDisabledItem("5h Hand", to: settingsMenu)
+    addDisabledItem("Short-window Hand", to: settingsMenu)
     settingsMenu.addItem(sliderItem(for: .fastHandLength))
     settingsMenu.addItem(sliderItem(for: .fastHandWidth))
     settingsMenu.addItem(sliderItem(for: .fastHandRadius))

@@ -10,7 +10,7 @@ The goal is one calm glance, not another dashboard.
 
 ## Providers
 
-Glideslope tracks two providers, each contributing a fast (~5h) and a slow (weekly) window:
+Glideslope tracks two providers. Each contributes the windows its usage API currently reports; a provider may expose only one cadence:
 
 - **Codex** — teal hands.
 - **Claude Code** — coral hands.
@@ -52,7 +52,7 @@ The native icon is the focus, and the hands are the focus of the icon — the mo
 - **Pressure → depth.** The most-constrained (highest-pressure) window draws last, so the hand that matters most sits in the foreground.
 - Each hand has only a thin dark edge (kept minimal so the bright fill dominates).
 - The redline marks the consumed-past-pace danger end; a hand swinging into it is the only color cue you need.
-- The icon exposes local slider settings for Fable star size/radius, 5-hour hand
+- The icon exposes local slider settings for Fable star size/radius, short-window hand
   length/width/radius, weekly hand length/width/radius, scale dot size/radius,
   redline width, and hub dot size. Provider colors and redline color use swatch
   menus. Settings are stored in `UserDefaults` and redraw the menu-bar icon
@@ -85,7 +85,7 @@ Percentages are shown as percentage points of pressure unless otherwise labeled.
 
 - Read Codex auth from `~/.codex/auth.json`
 - Call `https://chatgpt.com/backend-api/wham/usage`
-- Use `rate_limit.primary_window` (fast) and `rate_limit.secondary_window` (slow)
+- Read `rate_limit.primary_window` and `rate_limit.secondary_window` as transport slots, then classify each from its authoritative `limit_window_seconds`; do not assume `primary_window` means 5h
 - Expected fields: `used_percent`, `reset_at`, `limit_window_seconds`
 
 ### Claude Code

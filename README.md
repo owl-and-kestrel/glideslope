@@ -11,7 +11,7 @@ Hands are deconflicted on three axes:
 - **scoped limit → marker:** active Claude Fable weekly usage appears as a four-pointed coral star on the outer edge. It follows the latest fresh Anthropic reading, and disappears when a later successful response no longer includes that active scoped limit.
 - **pressure → depth:** the most-constrained (highest-pressure) window draws on top, so the hand that matters most is in the foreground.
 
-So a long teal hand is Codex's weekly window; a short coral hand is Claude's 5-hour window; a coral star is Claude's active Fable scoped weekly limit.
+So a long teal hand is Codex's weekly window when that is the Codex limit the API reports; a short coral hand is Claude's 5-hour window; a coral star is Claude's active Fable scoped weekly limit. Glideslope classifies Codex windows from their reported duration rather than assuming the API's `primary_window` is always five hours.
 
 The hands are pace-relative consumption meters. A hand pegged left means `0%` consumed, centered means exactly on the expected reset pace, and pegged right means `100%` consumed / `0%` remaining.
 
@@ -25,7 +25,7 @@ The menu groups windows by provider and uses a simple pressure color per window:
 
 The **Icon Settings** submenu lets you tune the menu-bar glyph without editing
 code. Slider controls persist local point values for Fable star size/radius,
-5-hour hand length/width/radius, weekly hand length/width/radius, scale dot
+short-window hand length/width/radius, weekly hand length/width/radius, scale dot
 size/radius, redline width, and hub dot size. Color choices for Codex, Claude,
 and the redline are persisted alongside them. Radius sliders are intentionally
 permissive: elements can be pushed off the dial and will only stop when the icon
@@ -63,7 +63,7 @@ Claude Desktop's always-populated plan display is not a supported alternate sour
 
 ### Release updates
 
-Glideslope `0.4.0` (build `8`) embeds Sparkle `2.9.4` and checks the signed feed at `https://updates.owlandkestrel.com/glideslope/stable/appcast.xml`. Release builds check and install updates automatically by default. **Install Updates Automatically** opts out of installation only—scheduled checks continue—and **Check for Updates…** remains available. Debug builds never update themselves automatically. Update traffic contains no installation identifier, account data, usage readings, or Codex/Claude credentials.
+Glideslope `0.4.1` (build `9`) embeds Sparkle `2.9.4` and checks the signed feed at `https://updates.owlandkestrel.com/glideslope/stable/appcast.xml`. Release builds check and install updates automatically by default. **Install Updates Automatically** opts out of installation only—scheduled checks continue—and **Check for Updates…** remains available. Debug builds never update themselves automatically. Update traffic contains no installation identifier, account data, usage readings, or Codex/Claude credentials.
 
 The feed and immutable, content-addressed archives live in the dedicated Cloudflare R2 bucket `ok-release-artifacts`; Plumage and O+K Release/Trust are not feed dependencies. Publication uploads and reads back the archive first, advances and verifies the signed appcast last, then submits the signed envelope to O+K's typed, append-only release ledger and emits a deduplicated `product.release_available` event to the `glideslope-updates` Chirp channel. Installed apps never poll Chirp or contain a Chirp credential.
 

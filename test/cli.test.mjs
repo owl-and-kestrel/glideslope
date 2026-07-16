@@ -35,3 +35,49 @@ test("manual state can be rendered without fetching", async () => {
   assert.match(swiftbar.stdout, /^Glideslope /);
   assert.match(swiftbar.stdout, /5h:/);
 });
+
+test("weekly-only Codex primary window is labeled from its duration", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "glideslope-"));
+  const state = path.join(dir, "state.json");
+  const resetAt = Math.floor(Date.now() / 1000) + 6 * 24 * 3600;
+  fs.writeFileSync(state, JSON.stringify({
+    payload: {
+      rate_limit: {
+        primary_window: {
+          used_percent: 10,
+          reset_at: resetAt,
+          limit_window_seconds: 7 * 24 * 3600,
+        },
+        secondary_window: null,
+      },
+    },
+  }));
+
+  const output = await execFileAsync(process.execPath, [cli, "status", "--state", state, "--no-fetch", "--json"]);
+  const status = JSON.parse(output.stdout);
+
+  assert.equal(status.windows.length, 1);
+  assert.equal(status.windows[0].label, "Weekly");
+  assert.doesNotMatch(status.summary, /5h/);
+});
+
+test("Codex windows without an authoritative duration are ignored", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "glideslope-"));
+  const state = path.join(dir, "state.json");
+  fs.writeFileSync(state, JSON.stringify({
+    payload: {
+      rate_limit: {
+        primary_window: {
+          used_percent: 10,
+          reset_at: Math.floor(Date.now() / 1000) + 3600,
+        },
+      },
+    },
+  }));
+
+  const output = await execFileAsync(process.execPath, [cli, "status", "--state", state, "--no-fetch", "--json"]);
+  const status = JSON.parse(output.stdout);
+
+  assert.equal(status.ok, false);
+  assert.deepEqual(status.windows, []);
+});

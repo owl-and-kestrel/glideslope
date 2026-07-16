@@ -14,18 +14,15 @@ enum Provider: String, Codable, CaseIterable, Sendable {
   }
 }
 
-/// The two cadences every provider exposes. `fast` is the short rolling window
-/// (~5h); `slow` is the long window (weekly). The gauge draws `fast` on the
-/// outer ring (background) and `slow` on the inner ring (foreground).
+/// The two visual lanes used by the gauge. Providers do not necessarily expose
+/// both lanes: Codex, for example, may currently return only a weekly window.
+/// The API-reported duration decides the lane; payload field names do not.
 enum WindowSpeed: String, Codable, Sendable {
   case fast
   case slow
 
-  var displayName: String {
-    switch self {
-    case .fast: "5h"
-    case .slow: "Weekly"
-    }
+  static func cadence(for duration: TimeInterval) -> WindowSpeed {
+    duration >= 24 * 60 * 60 ? .slow : .fast
   }
 }
 
@@ -89,8 +86,10 @@ struct UsageWindow: Codable, Identifiable, Sendable {
     return "\(provider.rawValue)_\(speed.rawValue)\(scopeKey)"
   }
 
-  /// Short label for the dropdown ("5h", "Weekly", "Fable").
-  var label: String { scope?.displayName ?? speed.displayName }
+  /// Short label for the dropdown ("5h", "Weekly", "Fable"). The provider's
+  /// reported duration is authoritative so a weekly `primary_window` can never
+  /// be mislabeled as a five-hour limit.
+  var label: String { scope?.displayName ?? Self.durationLabel(limitWindowSeconds) }
 
   /// Provider-qualified label for the menu-bar summary ("Codex 5h").
   var qualifiedLabel: String { "\(provider.displayName) \(label)" }
@@ -106,6 +105,20 @@ struct UsageWindow: Codable, Identifiable, Sendable {
   var pressureDisplay: String {
     let rounded = Int(pressurePercent.rounded())
     return rounded > 0 ? "+\(rounded)%" : "\(rounded)%"
+  }
+
+  private static func durationLabel(_ seconds: TimeInterval) -> String {
+    let minutes = max(1, Int((seconds / 60).rounded()))
+    if minutes == 7 * 24 * 60 {
+      return "Weekly"
+    }
+    if minutes.isMultiple(of: 24 * 60) {
+      return "\(minutes / (24 * 60))d"
+    }
+    if minutes.isMultiple(of: 60) {
+      return "\(minutes / 60)h"
+    }
+    return "\(minutes)m"
   }
 }
 

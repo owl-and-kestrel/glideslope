@@ -217,6 +217,46 @@ struct UsageResultCacheTests {
     #expect(failure.error == "unavailable")
   }
 
+  @Test("cached Codex windows repair old positional cadence")
+  func cachedCodexWindowRepairsOldPositionalCadence() throws {
+    let directory = temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let cacheURL = directory.appending(path: "usage-cache.json")
+    let capturedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    let resetAt = capturedAt.addingTimeInterval(3 * 24 * 3_600)
+    let historicallyMisclassified = makeWindow(
+      provider: .codex,
+      speed: .fast,
+      usedPercent: 10,
+      resetAt: resetAt,
+      duration: 7 * 24 * 3_600,
+      now: capturedAt
+    )
+
+    var firstProcess = UsageResultCache(persistenceURL: cacheURL)
+    _ = firstProcess.reconcile(
+      ProviderResult(
+        provider: .codex,
+        ok: true,
+        source: "live",
+        error: nil,
+        windows: [historicallyMisclassified]
+      ),
+      now: capturedAt
+    )
+
+    var relaunchedProcess = UsageResultCache(persistenceURL: cacheURL)
+    let cached = relaunchedProcess.reconcile(
+      .failure(.codex, source: "error", error: "usage fetch failed"),
+      now: capturedAt.addingTimeInterval(60)
+    )
+
+    #expect(cached.windows.count == 1)
+    #expect(cached.windows[0].speed == .slow)
+    #expect(cached.windows[0].label == "Weekly")
+    #expect(cached.windows[0].id == "codex_slow")
+  }
+
   private func makeWindow(
     provider: Provider,
     speed: WindowSpeed,

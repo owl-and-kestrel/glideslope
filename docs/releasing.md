@@ -50,9 +50,12 @@ Bootstrap state as of 2026-07-10:
   gate for every release.
 - Chirp channel `glideslope-updates` exists and is active. Initialization
   record: `msg_2dbcb564d6a24859bebe0323be04a343`.
-- Previous stable `0.4.0` build `8` is recorded in the O+K release ledger as publication
-  `rpub_4138f9b8-9a57-492f-b7fa-28415ef854aa`; an identical retry replays that
-  immutable receipt rather than creating another publication.
+- Stable `0.4.1` build `9` is recorded in the O+K release ledger as publication
+  `rpub_6b174f80-1c62-4f01-bdfa-84d9c88541d5`; its release announcement is
+  Chirp record `evt_c786b4c9a7f044408f7e037283132c32`. The immutable archive
+  SHA-256 is `57071931c935733b67e864360fc36b57fd3ad805774257b77545c4feb9a80aee`.
+  An identical retry replays the existing receipts rather than creating a
+  second publication or announcement.
 
 ## Sparkle Trust Authority
 

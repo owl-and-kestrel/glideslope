@@ -73,6 +73,7 @@ final class StatusItemController {
     header.isEnabled = false
     menu.addItem(header)
     if let result, result.ok, !result.windows.isEmpty {
+      let now = Date()
       for window in result.windows {
         let item = NSMenuItem(
           title: "    \(window.label): \(window.remainingDisplay) left, \(window.pressureDisplay) \(window.band.label.lowercased())",
@@ -82,6 +83,7 @@ final class StatusItemController {
         item.image = markerImage(for: window, style: style)
         item.isEnabled = false
         menu.addItem(item)
+        addDisabledItem("        resets \(window.resetDescription(now: now))", to: menu)
       }
       if result.source == "cached" {
         let detailParts = [

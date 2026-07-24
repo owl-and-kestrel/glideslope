@@ -13,6 +13,8 @@ Hands are deconflicted on three axes:
 
 So a long teal hand is Codex's weekly window when that is the Codex limit the API reports; a short coral hand is Claude's 5-hour window; a coral star is Claude's active Fable scoped weekly limit. Glideslope classifies Codex windows from their reported duration rather than assuming the API's `primary_window` is always five hours.
 
+The open clock hands in the unused bottom arc show reset phase for every active broad limit without adding another dial face. They rotate clockwise through their complete window and return to 12 at reset. Seven ticks on the inner weekly track make each interval one day; five ticks on the outer 5h track make each interval one hour. A hand stops just inside its matching track, provider remains encoded by color, and a track appears only when that kind of limit exists. The complete time display sits behind the quota display, so quota hands and scoped markers remain visually dominant where they cross. Scoped limits such as Fable remain off the reset clock to keep it legible. The dropdown gives the exact local reset time and countdown for every displayed limit.
+
 The hands are pace-relative consumption meters. A hand pegged left means `0%` consumed, centered means exactly on the expected reset pace, and pegged right means `100%` consumed / `0%` remaining.
 
 When a provider isn't signed in (or its token has expired), the dropdown shows a **Sign in to …** item that launches that CLI's login flow in Terminal (`codex login` / `claude auth login`); after signing in, hit Refresh.

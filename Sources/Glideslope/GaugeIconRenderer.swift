@@ -1,30 +1,47 @@
 import AppKit
 
-/// Renders the menu-bar dial as a dark circle with a dotted gauge scale and two
-/// (or four) bold hands. The hands are the point of the program, so they are
-/// large and vivid; the scale recedes to white dots, and the only colored part
-/// of the scale is a bright-red redline cluster on the hot end.
+/// Renders the menu-bar dial as a dark circle with a dotted pressure scale,
+/// broad-limit hands, and a small open reset clock in the unused bottom arc. The
+/// pressure hands remain dominant; the reset clock is a secondary glanceable
+/// readout of where each active broad window sits in its cycle.
 ///
 /// The canvas is square so the dial never crops against the menu bar.
 ///
 /// Deconfliction:
 ///   • provider  -> hand color (Codex teal, Claude coral)
-///   • window    -> radius + depth: the fast (~5h) window is a long hand drawn
-///                  first (background); the slow (weekly) window is a shorter
-///                  hand drawn last (foreground).
+///   • window    -> radius + depth: weekly is long; fast (~5h) is short.
 ///   • scope     -> marker: scoped model limits such as Claude Fable draw as
 ///                  four-point stars on the outer edge, not as extra hands.
+/// The reset clock reuses provider color, with weekly hands on a seven-tick
+/// inner track and ~5h hands on a five-tick outer track. Each hand rotates
+/// clockwise through a full cycle and returns to 12 at reset.
 enum GaugeIconRenderer {
   static let size = NSSize(width: 22, height: 22)
   private static let circleRadius: CGFloat = 10.5
   private static let dotCount = 16
   private static let dialStart: CGFloat = 230
   private static let dialSweep: CGFloat = -280
+  // The reset hands span roughly half the full dial's diameter: large enough
+  // to read at the actual 22pt menu-bar size, while remaining secondary.
+  private static let resetDialCenterYOffset: CGFloat = -5.60
+  private static let resetWeeklyTrackRadius: CGFloat = 2.55
+  private static let resetFastTrackRadius: CGFloat = 4.05
+  private static let resetWeeklyTickLength: CGFloat = 0.60
+  private static let resetFastTickLength: CGFloat = 0.75
+  private static let resetWeeklyHandLength: CGFloat = 2.65
+  private static let resetFastHandLength: CGFloat = 3.75
+  private static let resetWeeklyHandWidth: CGFloat = 0.95
+  private static let resetFastHandWidth: CGFloat = 1.02
   /// Consumption fraction beyond which the scale dots turn red.
   private static let redlineFraction: CGFloat = 0.78
 
   @MainActor
-  static func image(status: UsageStatus, scale: CGFloat = 1, style: GaugeIconStyle = AppSettings.iconStyle) -> NSImage {
+  static func image(
+    status: UsageStatus,
+    scale: CGFloat = 1,
+    style: GaugeIconStyle = AppSettings.iconStyle,
+    now: Date = Date()
+  ) -> NSImage {
     let center = NSPoint(x: size.width / 2, y: size.height / 2)
     let image = NSImage(size: NSSize(width: size.width * scale, height: size.height * scale))
 
@@ -39,6 +56,13 @@ enum GaugeIconRenderer {
 
     drawFace(center: center)
     drawScale(center: center, style: style)
+
+    let resetWindows = resetDialWindows(status: status, now: now)
+    let resetCenter = NSPoint(x: center.x, y: center.y + resetDialCenterYOffset)
+    // The complete time display is a background layer. Quota hands and scoped
+    // markers draw over it whenever the two systems cross.
+    drawResetGraduations(center: resetCenter, windows: resetWindows)
+    drawResetHands(center: resetCenter, windows: resetWindows, style: style, now: now)
 
     // Draw long (slow) lines first, then short (fast) lines on top, so a short
     // outer line is never hidden under a long line when their angles align.
@@ -202,6 +226,152 @@ enum GaugeIconRenderer {
     let cap = NSBezierPath(ovalIn: NSRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2))
     NSColor.black.setFill()
     cap.fill()
+  }
+
+  // MARK: - Reset clock
+
+  /// The reset clock occupies the 80-degree gap beneath the pressure scale.
+  /// It intentionally excludes scoped markers: those retain their distinct
+  /// star grammar on the main dial and their exact reset in the menu.
+  private static func drawResetHands(
+    center: NSPoint,
+    windows: [UsageWindow],
+    style: GaugeIconStyle,
+    now: Date
+  ) {
+    guard !windows.isEmpty else {
+      return
+    }
+
+    // The hands sit directly on the main dial face. Draw all dark edges first
+    // and all provider colors second so a later outline cannot erase a
+    // neighboring provider in aligned resets.
+    for window in windows {
+      drawResetHand(center: center, window: window, style: style, now: now, outlineOnly: true)
+    }
+    for window in windows {
+      drawResetHand(center: center, window: window, style: style, now: now, outlineOnly: false)
+    }
+
+    let pinRadius: CGFloat = 0.34
+    NSColor(calibratedWhite: 0.96, alpha: 0.92).setFill()
+    NSBezierPath(ovalIn: NSRect(
+      x: center.x - pinRadius,
+      y: center.y - pinRadius,
+      width: pinRadius * 2,
+      height: pinRadius * 2
+    )).fill()
+  }
+
+  private static func drawResetGraduations(center: NSPoint, windows: [UsageWindow]) {
+    let speeds = Set(windows.map(\.speed))
+    let tracks: [(speed: WindowSpeed, count: Int, radius: CGFloat, length: CGFloat, width: CGFloat, alpha: CGFloat)] = [
+      (.slow, 7, resetWeeklyTrackRadius, resetWeeklyTickLength, 0.70, 0.64),
+      (.fast, 5, resetFastTrackRadius, resetFastTickLength, 0.75, 0.70)
+    ]
+
+    for track in tracks where speeds.contains(track.speed) {
+      NSColor(calibratedWhite: 0.92, alpha: track.alpha).setStroke()
+      for angle in resetGraduationAngles(count: track.count) {
+        let radians = angle * .pi / 180
+        let dx = cos(radians)
+        let dy = sin(radians)
+        let innerRadius = track.radius - track.length / 2
+        let outerRadius = track.radius + track.length / 2
+        let tick = NSBezierPath()
+        tick.move(to: NSPoint(
+          x: center.x + dx * innerRadius,
+          y: center.y + dy * innerRadius
+        ))
+        tick.line(to: NSPoint(
+          x: center.x + dx * outerRadius,
+          y: center.y + dy * outerRadius
+        ))
+        tick.lineWidth = track.width
+        tick.lineCapStyle = .round
+        tick.stroke()
+      }
+    }
+  }
+
+  private static func drawResetHand(
+    center: NSPoint,
+    window: UsageWindow,
+    style: GaugeIconStyle,
+    now: Date,
+    outlineOnly: Bool
+  ) {
+    let radians = resetAngle(for: window, now: now) * .pi / 180
+    let length = window.speed == .slow ? resetWeeklyHandLength : resetFastHandLength
+    let colorWidth = window.speed == .slow ? resetWeeklyHandWidth : resetFastHandWidth
+    let dx = cos(radians)
+    let dy = sin(radians)
+    let nx = -dy
+    let ny = dx
+    // A fractional provider lane keeps coincident Codex/Claude resets visible
+    // as a two-color pair instead of letting the later draw erase one source.
+    let providerOffset: CGFloat = window.provider == .codex ? -0.28 : 0.28
+    let origin = NSPoint(
+      x: center.x + nx * providerOffset,
+      y: center.y + ny * providerOffset
+    )
+    let tip = NSPoint(
+      x: origin.x + dx * length,
+      y: origin.y + dy * length
+    )
+    let hand = NSBezierPath()
+    hand.move(to: origin)
+    hand.line(to: tip)
+    hand.lineCapStyle = .round
+
+    if outlineOnly {
+      NSColor.black.setStroke()
+      hand.lineWidth = colorWidth + 0.70
+    } else {
+      providerColor(window.provider, style: style).setStroke()
+      hand.lineWidth = colorWidth
+    }
+    hand.stroke()
+  }
+
+  static func resetDialWindows(status: UsageStatus, now: Date) -> [UsageWindow] {
+    status.windows
+      .filter {
+        $0.visualStyle == .hand
+          && $0.scope == nil
+          && $0.resetAt > now
+      }
+      .sorted { a, b in
+        // Inner weekly hands establish the background; outer fast hands remain
+        // visible on top. Within a track, the sooner reset draws last.
+        if a.speed != b.speed {
+          return a.speed == .slow
+        }
+        if a.resetAt != b.resetAt {
+          return a.resetAt > b.resetAt
+        }
+        return a.provider.rawValue < b.provider.rawValue
+      }
+  }
+
+  static func resetGraduationAngles(count: Int) -> [CGFloat] {
+    guard count > 0 else {
+      return []
+    }
+    return (0..<count).map { index in
+      90 - CGFloat(index) * 360 / CGFloat(count)
+    }
+  }
+
+  static func resetAngle(for window: UsageWindow, now: Date) -> CGFloat {
+    let duration = max(60, window.limitWindowSeconds)
+    let rawRemaining = window.resetAt.timeIntervalSince(now)
+    guard duration.isFinite, rawRemaining.isFinite else {
+      return 90
+    }
+    let remaining = min(duration, max(0, rawRemaining))
+    let elapsedFraction = 1 - remaining / duration
+    return 90 - CGFloat(elapsedFraction) * 360
   }
 
   // MARK: - Colors

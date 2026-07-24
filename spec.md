@@ -59,6 +59,15 @@ The native icon is the focus, and the hands are the focus of the icon — the mo
   immediately. Geometry sliders are intentionally broad and do not apply hidden
   renderer clamps; elements may move off the dial and are bounded only by the
   icon canvas.
+- The unused bottom arc contains open reset-clock hands for active broad limits,
+  without a separate face or rim. Each hand completes one clockwise revolution
+  per limit window and returns to 12 at reset. Seven ticks on the inner weekly
+  track divide it into one-day intervals; five ticks on the outer 5h track
+  divide it into one-hour intervals. Hands stop just inside their matching
+  track, and absent limit kinds do not create hands or tick tracks. Scoped
+  markers remain off the reset clock. The complete time layer draws beneath
+  quota hands and scoped markers. The menu shows each limit's local reset time
+  and compact countdown.
 
 Each hand uses a pace-relative consumption scale: pegged left = `0%` consumed, centered = exactly on the expected reset pace, pegged right = `100%` consumed / `0%` remaining. Usage from `0%` to on-track maps across the left half; on-track to exhausted maps across the right half.
 

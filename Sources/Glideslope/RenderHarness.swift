@@ -7,14 +7,20 @@ import AppKit
 enum RenderHarness {
   static func run(outputPath: String) {
     let scenarios: [(String, UsageStatus)] = [
-      ("typical", sample(codexFast: 28, codexSlow: 55, claudeFast: 74, claudeSlow: 18)),
-      ("codex hot", sample(codexFast: 92, codexSlow: 80, claudeFast: 12, claudeSlow: 40)),
+      ("typical", sample(codexFast: nil, codexSlow: 55, claudeFast: 74, claudeSlow: 18)),
+      ("codex only", sample(codexFast: nil, codexSlow: 80, claudeFast: nil, claudeSlow: nil)),
       ("claude only", sample(codexFast: nil, codexSlow: nil, claudeFast: 60, claudeSlow: 30)),
-      ("fable scoped", sample(codexFast: 34, codexSlow: 45, claudeFast: 0, claudeSlow: 44, claudeFable: 78))
+      ("fable scoped", sample(codexFast: nil, codexSlow: 45, claudeFast: 0, claudeSlow: 44, claudeFable: 78)),
+      ("aligned resets", sample(codexFast: nil, codexSlow: 34, claudeFast: 48, claudeSlow: 28, alignedResets: true)),
+      ("pegged", sample(codexFast: nil, codexSlow: 100, claudeFast: 50, claudeSlow: 0))
     ]
 
-    let scale: CGFloat = 12
-    let tile = NSSize(width: GaugeIconRenderer.size.width * scale, height: GaugeIconRenderer.size.height * scale)
+    let previewScale: CGFloat = 12
+    let displayScale: CGFloat = 2
+    let tile = NSSize(
+      width: GaugeIconRenderer.size.width * previewScale,
+      height: GaugeIconRenderer.size.height * previewScale
+    )
     let labelStrip: CGFloat = 22
     let padding: CGFloat = 16
     let backgrounds: [(String, NSColor, NSAppearance?)] = [
@@ -30,8 +36,8 @@ enum RenderHarness {
     ))
 
     sheet.lockFocus()
-    // Crisp nearest-neighbor upscale so the preview shows real pixels, not a
-    // smeared interpolation of the tiny source image.
+    // Render at a Retina-sized 2x backing resolution, then use a crisp
+    // nearest-neighbor upscale so the QA sheet exposes real display pixels.
     NSGraphicsContext.current?.imageInterpolation = .none
     NSColor(white: 0.3, alpha: 1).setFill()
     NSRect(origin: .zero, size: sheet.size).fill()
@@ -48,7 +54,11 @@ enum RenderHarness {
 
         var icon = NSImage()
         appearance.performAsCurrentDrawingAppearance {
-          icon = GaugeIconRenderer.image(status: scenario.1, scale: scale)
+          icon = GaugeIconRenderer.image(
+            status: scenario.1,
+            scale: displayScale,
+            now: scenario.1.generatedAt
+          )
         }
         icon.draw(in: cell, from: .zero, operation: .sourceOver, fraction: 1)
 
@@ -82,7 +92,7 @@ enum RenderHarness {
 
     var icon = NSImage()
     NSAppearance(named: .aqua)?.performAsCurrentDrawingAppearance {
-      icon = GaugeIconRenderer.image(status: status, scale: iconScale)
+      icon = GaugeIconRenderer.image(status: status, scale: iconScale, now: status.generatedAt)
     }
     icon.draw(
       in: NSRect(
@@ -123,7 +133,8 @@ enum RenderHarness {
     codexSlow: Double?,
     claudeFast: Double?,
     claudeSlow: Double?,
-    claudeFable: Double? = nil
+    claudeFable: Double? = nil,
+    alignedResets: Bool = false
   ) -> UsageStatus {
     let now = Date()
     func win(
@@ -149,13 +160,17 @@ enum RenderHarness {
         visualStyle: visualStyle
       )
     }
+    let codexFastPhase = alignedResets ? 0.5 : 0.35
+    let codexSlowPhase = alignedResets ? 0.5 : 0.62
+    let claudeFastPhase = alignedResets ? 0.5 : 0.78
+    let claudeSlowPhase = alignedResets ? 0.5 : 0.45
     let codexWindows = [
-      win(.codex, .fast, codexFast, 5 * 3600, 0.5),
-      win(.codex, .slow, codexSlow, 7 * 24 * 3600, 0.5)
+      win(.codex, .fast, codexFast, 5 * 3600, codexFastPhase),
+      win(.codex, .slow, codexSlow, 7 * 24 * 3600, codexSlowPhase)
     ].compactMap { $0 }
     let claudeWindows = [
-      win(.claude, .fast, claudeFast, 5 * 3600, 0.5),
-      win(.claude, .slow, claudeSlow, 7 * 24 * 3600, 0.5),
+      win(.claude, .fast, claudeFast, 5 * 3600, claudeFastPhase),
+      win(.claude, .slow, claudeSlow, 7 * 24 * 3600, claudeSlowPhase),
       win(.claude, .slow, claudeFable, 7 * 24 * 3600, 0.5, scope: .fable, visualStyle: .outerStar)
     ].compactMap { $0 }
     return UsageStatus(generatedAt: now, results: [

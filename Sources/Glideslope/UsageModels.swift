@@ -107,6 +107,38 @@ struct UsageWindow: Codable, Identifiable, Sendable {
     return rounded > 0 ? "+\(rounded)%" : "\(rounded)%"
   }
 
+  /// Local wall-clock reset plus a compact countdown for the clickthrough.
+  /// The menu refreshes once a minute, so minute precision is intentional.
+  func resetDescription(now: Date) -> String {
+    let absolute = resetAt.formatted(
+      .dateTime.weekday(.abbreviated).hour().minute()
+    )
+    return "\(absolute) (\(resetCountdown(now: now)))"
+  }
+
+  func resetCountdown(now: Date) -> String {
+    Self.compactResetCountdown(resetAt.timeIntervalSince(now))
+  }
+
+  static func compactResetCountdown(_ seconds: TimeInterval) -> String {
+    guard seconds > 0 else {
+      return "now"
+    }
+
+    let totalMinutes = max(1, Int(ceil(seconds / 60)))
+    let days = totalMinutes / (24 * 60)
+    let hours = (totalMinutes % (24 * 60)) / 60
+    let minutes = totalMinutes % 60
+
+    if days > 0 {
+      return hours > 0 ? "\(days)d \(hours)h" : "\(days)d"
+    }
+    if hours > 0 {
+      return minutes > 0 ? "\(hours)h \(minutes)m" : "\(hours)h"
+    }
+    return "\(minutes)m"
+  }
+
   private static func durationLabel(_ seconds: TimeInterval) -> String {
     let minutes = max(1, Int((seconds / 60).rounded()))
     if minutes == 7 * 24 * 60 {
@@ -221,7 +253,8 @@ struct UsageStatus: Sendable {
       return "Glideslope: usage unavailable"
     }
     let sourceSuffix = result(for: worst.provider)?.sourceLabel.map { " (\($0))" } ?? ""
-    return "\(worst.qualifiedLabel) \(worst.pressureDisplay) \(worst.band.label.lowercased())\(sourceSuffix)"
+    let reset = worst.resetCountdown(now: generatedAt)
+    return "\(worst.qualifiedLabel) \(worst.pressureDisplay) \(worst.band.label.lowercased())\(sourceSuffix) · resets in \(reset)"
   }
 }
 

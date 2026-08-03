@@ -103,10 +103,37 @@ struct ClaudeUsageClient: Sendable {
   // MARK: - Token (read-only)
 
   private func loadCredential() throws -> ClaudeCredential {
+    #if os(macOS)
+    return try Self.resolveCredential(
+      environment: ProcessInfo.processInfo.environment,
+      homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+      readFile: { try? String(contentsOfFile: $0, encoding: .utf8) },
+      readKeychain: { try securityBlob() }
+    )
+    #else
+    return try Self.resolveCredential(
+      environment: ProcessInfo.processInfo.environment,
+      homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+      readFile: { try? String(contentsOfFile: $0, encoding: .utf8) },
+      readKeychain: { throw ClaudeError.notSignedIn }
+    )
+    #endif
+  }
+
+  /// Resolve credentials through the one production precedence path while
+  /// accepting read-only dependencies for deterministic, non-secret tests.
+  /// Keeping this seam pure also makes it mechanically evident that resolution
+  /// has no write or refresh capability.
+  static func resolveCredential(
+    environment: [String: String],
+    homeDirectory: URL,
+    readFile: (String) -> String?,
+    readKeychain: () throws -> String
+  ) throws -> ClaudeCredential {
     // 1) Explicit env var (highest precedence). Carries no expiry metadata, so
     //    trust the caller to keep it fresh — this is the `claude setup-token`
     //    long-lived-token path.
-    if let envToken = ProcessInfo.processInfo.environment["CLAUDE_CODE_OAUTH_TOKEN"]?
+    if let envToken = environment["CLAUDE_CODE_OAUTH_TOKEN"]?
       .trimmingCharacters(in: .whitespacesAndNewlines), !envToken.isEmpty {
       return ClaudeCredential(accessToken: envToken, expiresAt: nil)
     }
@@ -114,12 +141,19 @@ struct ClaudeUsageClient: Sendable {
     // 2) Token file — the reliable channel for a GUI/login-item app, which does
     //    not inherit the shell environment. Default `~/.glideslope/claude-token`,
     //    overridable via GLIDESLOPE_CLAUDE_TOKEN_FILE.
-    if let fileToken = tokenFromFile() {
+    let path: String
+    if let override = environment["GLIDESLOPE_CLAUDE_TOKEN_FILE"], !override.isEmpty {
+      path = (override as NSString).expandingTildeInPath
+    } else {
+      path = homeDirectory.appending(path: ".glideslope/claude-token").path
+    }
+    if let contents = readFile(path), let fileToken = firstToken(in: contents) {
       return ClaudeCredential(accessToken: fileToken, expiresAt: nil)
     }
 
-    #if os(macOS)
-    let blob = try securityBlob()
+    // 3) Shared Claude Code Keychain item, read only. The injected operation
+    //    can only return bytes; it cannot mutate or refresh the credential.
+    let blob = try readKeychain()
     guard
       let data = blob.data(using: .utf8),
       let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -131,25 +165,9 @@ struct ClaudeUsageClient: Sendable {
     }
     let expiresAt = (oauth["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0 / 1000) }
     return ClaudeCredential(accessToken: token, expiresAt: expiresAt)
-    #else
-    throw ClaudeError.notSignedIn
-    #endif
   }
 
-  /// Read a long-lived token from `GLIDESLOPE_CLAUDE_TOKEN_FILE` (or the default
-  /// `~/.glideslope/claude-token`). Returns the first non-empty, non-comment
-  /// line, trimmed. Nil if the file is absent or empty.
-  private func tokenFromFile() -> String? {
-    let path: String
-    if let override = ProcessInfo.processInfo.environment["GLIDESLOPE_CLAUDE_TOKEN_FILE"], !override.isEmpty {
-      path = (override as NSString).expandingTildeInPath
-    } else {
-      path = FileManager.default.homeDirectoryForCurrentUser
-        .appending(path: ".glideslope/claude-token").path
-    }
-    guard let contents = try? String(contentsOfFile: path, encoding: .utf8) else {
-      return nil
-    }
+  private static func firstToken(in contents: String) -> String? {
     for line in contents.split(whereSeparator: \.isNewline) {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       if !trimmed.isEmpty && !trimmed.hasPrefix("#") {

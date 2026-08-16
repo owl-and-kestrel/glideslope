@@ -69,6 +69,18 @@ Glideslope `0.4.1` (build `9`) embeds Sparkle `2.9.4` and checks the signed feed
 
 The feed and immutable, content-addressed archives live in the dedicated Cloudflare R2 bucket `ok-release-artifacts`; Plumage and O+K Release/Trust are not feed dependencies. Publication uploads and reads back the archive first, advances and verifies the signed appcast last, then submits the signed envelope to O+K's typed, append-only release ledger and emits a deduplicated `product.release_available` event to the `glideslope-updates` Chirp channel. Installed apps never poll Chirp or contain a Chirp credential.
 
+Glideslope does not have a standalone web product. Its canonical public page is
+`https://owlandkestrel.com/apps/glideslope`. The optional
+`glideslope.owlandkestrel.com` hostname is a redirect-only convenience surface;
+it must not acquire content, application routes, cookies, or a second product
+authority. O+K owns that shared redirect surface through its exact ecosystem
+allowlist and generated Nginx configuration in
+`config/ecosystem-redirects.json`; Glideslope deliberately carries no second
+copy. Cloudflare publishes unproxied A and AAAA records to `ok-spruce`, and the
+shared exact-name certificate renews through Certbot. Every HTTP and HTTPS path
+returns the same permanent redirect to the canonical Apps page. Removing the
+alias never removes the canonical Apps route or Glideslope release feed.
+
 The technical alpha is ad-hoc signed rather than Developer ID signed/notarized, so its first installation may require **System Settings → Privacy & Security → Open Anyway**. Pre-Sparkle users need one manual bridge installation; later automatic releases can add Developer ID signing through the same feed while preserving the bundle id and Sparkle Ed25519 key. See [`docs/releasing.md`](docs/releasing.md).
 
 ### Preview

@@ -1,7 +1,7 @@
 # Glideslope Release Channel
 
-Glideslope uses Sparkle as its executable update authority and a dedicated
-Cloudflare R2 hostname as its stable distribution boundary. Plumage, O+K
+Glideslope uses Sparkle as its executable update authority and an O+K-owned
+HTTPS release origin as its stable distribution boundary. Plumage, O+K
 Release/Trust, and Chirp may describe or announce a release, but none is in the
 installed app's update-fetch or verification path.
 
@@ -13,7 +13,7 @@ Current release identity:
 - update channel: `stable`
 - Sparkle: exact version `2.9.4`
 - feed: `https://updates.owlandkestrel.com/glideslope/stable/appcast.xml`
-- R2 bucket: `ok-release-artifacts`
+- storage authority: Nest release origin on Spruce
 
 `package.json` is the version and monotonic-build authority. Release bundle
 generation embeds both values, the stable feed URL, and the Sparkle public key
@@ -21,11 +21,10 @@ in `Info.plist`.
 
 ## Distribution Boundary
 
-The R2 object layout is:
+The public object layout is:
 
 ```text
-ok-release-artifacts/
-└── glideslope/
+glideslope/
     ├── stable/
     │   └── appcast.xml
     └── releases/
@@ -39,15 +38,14 @@ at an existing release URL. `stable/appcast.xml` is the one mutable channel
 pointer and is published only after its referenced archive is publicly readable
 and verified.
 
-Bootstrap state as of 2026-07-10:
+Migration state as of 2026-08-20:
 
-- R2 bucket `ok-release-artifacts` exists.
-- The public `r2.dev` URL is disabled.
-- Custom domain `updates.owlandkestrel.com` is enabled, ownership is active, and
-  its minimum TLS version is 1.2.
-- Cloudflare reports the custom-domain certificate as `active`; HTTPS reaches
-  the dedicated bucket. A successful artifact and feed readback remains a hard
-  gate for every release.
+- the complete 18-object R2 inventory is imported into the O+K-owned Spruce
+  origin and reconciled without hidden or orphaned keys;
+- the unchanged hostname, all release bytes, Sparkle signatures, GET, HEAD,
+  range responses, cache policy, and MIME types pass direct-origin replay;
+- direct R2 publication is retired and channel advancement is frozen until the
+  authenticated Nest release-origin client replaces it;
 - Chirp channel `glideslope-updates` exists and is active. Initialization
   record: `msg_2dbcb564d6a24859bebe0323be04a343`.
 - Stable `0.4.1` build `9` is recorded in the O+K release ledger as publication
@@ -205,95 +203,37 @@ mutation-free plan:
 npm run release:dry-run
 ```
 
-Then provide mode-`0600` credential files and publish:
+Routine publication is intentionally frozen during the owned-origin cutover.
+`release:publish` fails closed before credential lookup or any remote write.
+It will be restored only when the authenticated Nest client owns the complete
+archive-first/pointer-last transaction:
 
 ```sh
-GLIDESLOPE_RELEASE_API_KEY_FILE=/secure/path/release-publisher-key.txt \
-GLIDESLOPE_CHIRP_API_KEY_FILE=/secure/path/chirp-key.txt \
-  npm run release:publish
+npm run release:publish  # expected to fail closed while frozen
 ```
 
-Before its first write, the publisher validates the manifest, exact appcast
-shape, content-addressed URL, ZIP length and SHA-256, both Sparkle signatures,
-all credentials, and the live feed's monotonic build. It then uploads and reads
-back the immutable archive, publishes and reads back the appcast, and only then
-publishes the signed envelope through O+K Release/Trust and then Chirp. A retry
-accepts an identical existing object/feed and replays the same ledger receipt,
-but refuses different bytes at the same artifact key or build.
+The dry-run still validates the manifest, exact appcast shape,
+content-addressed URL, ZIP length and SHA-256, and provenance signature. The
+future Nest transaction must additionally verify both Sparkle signatures,
+monotonic live build, exact pointer predecessor, immutable archive readback,
+appcast readback, Release/Trust receipt, and Chirp deduplication before it can
+replace the freeze.
 
-### Manual recovery procedure
+### Recovery procedure
 
-The commands below expose the publisher's R2 portion for disaster recovery and
-diagnosis. They are not an alternate routine release path.
-
-Upload the immutable archive first. Derive its destination from the packaged
-metadata rather than typing the hash by hand:
-
-```sh
-VERSION="$(plutil -extract version raw -o - package.json)"
-SHA256="$(awk '{print $1}' dist/release/Glideslope.zip.sha256)"
-ARTIFACT_KEY="glideslope/releases/v${VERSION}/${SHA256}/Glideslope.zip"
-
-wrangler r2 object put \
-  "ok-release-artifacts/${ARTIFACT_KEY}" \
-  --file dist/release/Glideslope.zip \
-  --content-type application/zip \
-  --cache-control 'public,max-age=31536000,immutable' \
-  --remote
-```
-
-Read it back over the public hostname and verify exact bytes before advancing
-the feed:
-
-```sh
-curl -fsS \
-  "https://updates.owlandkestrel.com/${ARTIFACT_KEY}" \
-  -o /tmp/Glideslope-release-readback.zip
-printf '%s  %s\n' "$SHA256" /tmp/Glideslope-release-readback.zip | shasum -a 256 -c -
-rm /tmp/Glideslope-release-readback.zip
-```
-
-Only then upload the signed appcast:
-
-```sh
-wrangler r2 object put \
-  ok-release-artifacts/glideslope/stable/appcast.xml \
-  --file dist/release/appcast.xml \
-  --content-type application/rss+xml \
-  --cache-control 'public,max-age=300,must-revalidate' \
-  --remote
-```
-
-Read the appcast back, verify its signature, and confirm its enclosure names the
-expected artifact URL and build:
-
-```sh
-curl -fsS \
-  https://updates.owlandkestrel.com/glideslope/stable/appcast.xml \
-  -o /tmp/glideslope-appcast.xml
-
-.build/artifacts/sparkle/Sparkle/bin/sign_update \
-  --ed-key-file ~/.config/owl-kestrel/secrets/sparkle-ed25519-private-key \
-  --verify /tmp/glideslope-appcast.xml
-
-xmllint --xpath 'string(//*[local-name()="enclosure"]/@url)' \
-  /tmp/glideslope-appcast.xml
-xmllint --xpath 'string(//*[local-name()="version"])' \
-  /tmp/glideslope-appcast.xml
-rm /tmp/glideslope-appcast.xml
-```
-
-Expected values for the current release are the content-addressed `0.4.1`
-archive URL and build `9`. Stop if public readback, signature verification, URL,
-or build differs.
+There is no direct-storage recovery command. Restore or republish only through
+Nest's receipt-bound operation and exact pointer CAS. Until that client is
+installed, the current `0.4.1` build `9` feed remains fixed and no new release
+is authorized. Do not use Wrangler, raw filesystem mutation, or an R2 fallback
+to advance the channel.
 
 ## Publication Ordering And Secondary Signals
 
 The complete order is an invariant:
 
-1. Upload the immutable archive.
+1. Stage and commit the immutable archive through Nest.
 2. Read it back and verify SHA-256.
-3. Upload `stable/appcast.xml` last.
+3. Advance `stable/appcast.xml` through exact pointer CAS last.
 4. Read it back and verify the signed feed, enclosure URL, and build.
 5. Publish the signed envelope to O+K's append-only Release/Trust ledger.
 6. Emit the deduplicated `product.release_available` event to Chirp channel
@@ -304,13 +244,13 @@ updater's source of truth. Moving auth into Plumage must not change or proxy the
 feed hostname. Installed apps never poll Chirp; Chirp remains publisher-side
 fan-out for humans and operators.
 
-The publisher validates package version, build metadata, app and bundle ids,
-channel, exact source commit, clean/dirty provenance, archive SHA-256, appcast
-SHA-256 and enclosure metadata, both Sparkle signatures, and the O+K P-256
-envelope before any remote write. Stable publication refuses a dirty source or
-unsigned provenance envelope unless an explicit unsafe rehearsal flag is
-supplied. Chirp's dedupe key includes channel, version, build, and artifact
-digest, so retrying after an announcement failure is safe.
+The restored publisher must validate package version, build metadata, app and
+bundle ids, channel, exact source commit, clean/dirty provenance, archive
+SHA-256, appcast SHA-256 and enclosure metadata, both Sparkle signatures, and
+the O+K P-256 envelope before any remote write. Stable publication must refuse
+a dirty source or unsigned provenance envelope. Chirp's dedupe key includes
+channel, version, build, and artifact digest, so retrying after an announcement
+failure remains safe.
 
 ## Release And Rollback Checklist
 
@@ -321,7 +261,7 @@ Before publication:
 - Confirm the packaged feed and archive signatures verify.
 - Install the ZIP on a separate Mac and test launch, usage-cache recovery,
   **Check for Updates…**, and the automatic-install opt-out.
-- Complete the archive-first/appcast-last R2 readback sequence.
+- Complete the archive-first/appcast-last Nest readback sequence.
 - Run `release:dry-run` and review both secondary payloads.
 
 After publication:

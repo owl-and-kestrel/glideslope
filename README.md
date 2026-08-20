@@ -67,7 +67,7 @@ Claude Desktop's always-populated plan display is not a supported alternate sour
 
 Glideslope `0.4.1` (build `9`) embeds Sparkle `2.9.4` and checks the signed feed at `https://updates.owlandkestrel.com/glideslope/stable/appcast.xml`. Release builds check and install updates automatically by default. **Install Updates Automatically** opts out of installation only—scheduled checks continue—and **Check for Updates…** remains available. Debug builds never update themselves automatically. Update traffic contains no installation identifier, account data, usage readings, or Codex/Claude credentials.
 
-The feed and immutable, content-addressed archives live in the dedicated Cloudflare R2 bucket `ok-release-artifacts`; Plumage and O+K Release/Trust are not feed dependencies. Publication uploads and reads back the archive first, advances and verifies the signed appcast last, then submits the signed envelope to O+K's typed, append-only release ledger and emits a deduplicated `product.release_available` event to the `glideslope-updates` Chirp channel. Installed apps never poll Chirp or contain a Chirp credential.
+The feed and immutable, content-addressed archives live on the O+K-owned release origin at `updates.owlandkestrel.com`; Plumage and O+K Release/Trust are not feed dependencies. Direct R2 publication is retired. New channel advancement is temporarily frozen until Glideslope uses Nest's authenticated release-origin client for archive-first, pointer-last publication and exact public readback. Installed apps continue to receive the current signed feed normally during this publisher freeze.
 
 Glideslope does not have a standalone web product. Its canonical public page is
 `https://owlandkestrel.com/apps/glideslope`. The optional

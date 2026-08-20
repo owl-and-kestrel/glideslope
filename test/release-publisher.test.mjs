@@ -53,6 +53,8 @@ test("dry-run validates the content-addressed ZIP and appcast without leaking cr
     const { stdout } = await run(f.directory, [], { GLIDESLOPE_OK_API_KEY: "secret-one", GLIDESLOPE_CHIRP_API_KEY: "secret-two" });
     const plan = JSON.parse(stdout);
     assert.equal(plan.mode, "dry-run");
+    assert.equal(plan.publicationAuthority, "nest-owned-release-origin");
+    assert.equal(plan.publicationStatus, "frozen-pending-authenticated-nest-client");
     assert.equal(plan.build, pkg.build);
     assert.match(plan.artifactKey, new RegExp(`/v${pkg.version}/[0-9a-f]{64}/Glideslope\\.zip$`, "u"));
     assert.equal(plan.releaseEndpoint, "https://owlandkestrel.com/api/admin/releases");
@@ -60,6 +62,18 @@ test("dry-run validates the content-addressed ZIP and appcast without leaking cr
     assert.equal("trustPayload" in plan, false);
     assert.equal(stdout.includes("secret-one"), false);
     assert.equal(stdout.includes("secret-two"), false);
+  } finally { await rm(f.directory, { recursive: true, force: true }); }
+});
+
+test("publication fails closed with no remaining direct R2 writer", async () => {
+  const f = await fixture({ signed: true });
+  try {
+    await assert.rejects(run(f.directory, ["--publish"], { OK_RELEASE_PUBLIC_KEY_FILE: f.publicKeyPath }),
+      /publication is frozen.*direct R2 writes are retired/iu);
+    const source = await readFile(path.join(root, "scripts/publish-release.mjs"), "utf8");
+    assert.equal(source.includes("wrangler"), false);
+    assert.equal(source.includes("r2Put"), false);
+    assert.equal(source.includes("r2 object put"), false);
   } finally { await rm(f.directory, { recursive: true, force: true }); }
 });
 

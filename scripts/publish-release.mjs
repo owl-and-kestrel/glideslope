@@ -1,15 +1,11 @@
 #!/usr/bin/env node
 
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import os from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-const execFileAsync = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const flags = new Set(process.argv.slice(2));
 const publish = flags.has("--publish");
@@ -20,12 +16,9 @@ const zipPath = path.join(releaseDir, "Glideslope.zip");
 const appcastPath = path.join(releaseDir, "appcast.xml");
 const manifestPath = path.join(releaseDir, "glideslope-update.json");
 const channel = process.env.GLIDESLOPE_RELEASE_CHANNEL || "stable";
-const bucket = process.env.GLIDESLOPE_R2_BUCKET || "ok-release-artifacts";
 const updateOrigin = validatedOrigin(process.env.GLIDESLOPE_UPDATE_ORIGIN || "https://updates.owlandkestrel.com");
 const okOrigin = validatedOrigin(process.env.GLIDESLOPE_OK_BASE_URL || "https://owlandkestrel.com");
 const chirpChannel = process.env.GLIDESLOPE_CHIRP_CHANNEL || "glideslope-updates";
-const sparkleKey = process.env.GLIDESLOPE_SPARKLE_PRIVATE_KEY_FILE || "/Users/jon/.config/owl-kestrel/secrets/sparkle-ed25519-private-key";
-const signUpdate = process.env.GLIDESLOPE_SIGN_UPDATE || path.join(root, ".build/artifacts/sparkle/Sparkle/bin/sign_update");
 
 if (flags.has("--help")) {
   process.stdout.write("Usage: node scripts/publish-release.mjs [--publish] [--allow-dirty] [--allow-unsigned]\n");
@@ -64,7 +57,7 @@ if (!item.signature) throw new Error("Appcast enclosure is missing an Ed25519 si
 const artifactURL = new URL(artifact.url);
 const expectedArtifactPath = `/glideslope/releases/v${version}/${zipSha256}/Glideslope.zip`;
 if (artifactURL.origin !== updateOrigin.origin || artifactURL.pathname !== expectedArtifactPath) {
-  throw new Error("Artifact URL is not the content-addressed canonical R2 URL.");
+  throw new Error("Artifact URL is not the content-addressed canonical release-origin URL.");
 }
 const expectedFeedPath = `/glideslope/${channel}/appcast.xml`;
 const feedURL = new URL(payload.updateFeed.url);
@@ -80,78 +73,25 @@ const chirpPayload = {
     version, build, releaseUrl: payload.downloadPageUrl, artifactSha256: zipSha256, sourceCommit: payload.source.commit }
 };
 
-const plan = { mode: publish ? "publish" : "dry-run", version, build, channel, bucket, artifactKey, appcastKey,
+const plan = { mode: publish ? "publish" : "dry-run", version, build, channel,
+  publicationAuthority: "nest-owned-release-origin", publicationStatus: "frozen-pending-authenticated-nest-client",
+  artifactKey, appcastKey,
   artifactSha256: zipSha256, appcastSha256, manifestSignatureVerified: decoded.signatureVerified,
   releaseEndpoint: new URL("/api/admin/releases", okOrigin).href,
-  publicationOrder: ["verify signatures", "upload/read back immutable ZIP", "upload/read back appcast", "publish Release/Trust ledger", "announce Chirp"],
+  publicationOrder: ["verify signatures", "Nest stage/commit/read back immutable ZIP", "Nest pointer CAS/read back appcast",
+    "publish Release/Trust ledger", "announce Chirp"],
   chirpPayload, source: payload.source };
 if (!publish) {
   process.stdout.write(`${JSON.stringify(plan, null, 2)}\n`);
   process.exit(0);
 }
 
-// Resolve every late dependency before the first remote write.
-const releaseKey = await credential(
-  "GLIDESLOPE_RELEASE_API_KEY",
-  "GLIDESLOPE_RELEASE_API_KEY_FILE",
-  path.join(os.homedir(), ".config/owl-and-kestrel/secrets/glideslope-release-api-key.txt")
-);
-const chirpKey = await credential("GLIDESLOPE_CHIRP_API_KEY", "GLIDESLOPE_CHIRP_API_KEY_FILE");
-if (!releaseKey) throw new Error("Set GLIDESLOPE_RELEASE_API_KEY or GLIDESLOPE_RELEASE_API_KEY_FILE.");
-if (!chirpKey) throw new Error("Set GLIDESLOPE_CHIRP_API_KEY or GLIDESLOPE_CHIRP_API_KEY_FILE.");
-if (!existsSync(sparkleKey) || !existsSync(signUpdate)) throw new Error("Sparkle signing key or sign_update is missing.");
-if (((await stat(sparkleKey)).mode & 0o077) !== 0) throw new Error("Sparkle private key must be mode 600.");
-await run(signUpdate, ["--ed-key-file", sparkleKey, "--verify", zipPath, item.signature]);
-await run(signUpdate, ["--ed-key-file", sparkleKey, "--verify", appcastPath]);
-
-const liveFeed = await publicRead(feedURL, true);
-if (liveFeed) {
-  const live = parseAppcast(liveFeed.toString("utf8"));
-  const liveBuild = Number(live.build);
-  if (!Number.isSafeInteger(liveBuild)) throw new Error("Live appcast has an invalid build.");
-  if (liveBuild > build) throw new Error(`Refusing build ${build}; live build is ${liveBuild}.`);
-  if (liveBuild === build && !liveFeed.equals(appcast)) throw new Error("Live appcast has the same build but different bytes.");
-}
-
-const temporary = await mkdtemp(path.join(os.tmpdir(), "glideslope-r2-"));
-try {
-  const existingPath = path.join(temporary, "existing.zip");
-  const existing = await r2Get(artifactKey, existingPath);
-  if (existing) {
-    if (!(await readFile(existingPath)).equals(zip)) throw new Error("Immutable R2 artifact key already contains different bytes.");
-  } else {
-    await r2Put(artifactKey, zipPath, "application/zip", "public, max-age=31536000, immutable");
-  }
-  const publicZip = await publicRead(artifactURL, false);
-  if (!publicZip.equals(zip)) throw new Error("Public ZIP readback did not match uploaded bytes.");
-
-  if (!liveFeed || !liveFeed.equals(appcast)) {
-    await r2Put(appcastKey, appcastPath, "application/xml; charset=utf-8", "public, max-age=60, must-revalidate");
-  }
-  const publicFeed = await publicRead(feedURL, false);
-  if (!publicFeed.equals(appcast)) throw new Error("Public appcast readback did not match uploaded bytes.");
-} finally {
-  await rm(temporary, { recursive: true, force: true });
-}
-
-const releasePublication = await requestJSON(
-  new URL("/api/admin/releases", okOrigin),
-  releaseKey,
-  { method: "POST", body: manifestDocument }
-);
-const snapshot = await requestJSON(new URL(`/chirp/api?channel=${encodeURIComponent(chirpChannel)}&limit=100`, okOrigin), chirpKey);
-const announced = Array.isArray(snapshot.records) && snapshot.records.some((record) => record?.payload?.dedupeKey === dedupeKey);
-let chirpRecord = null;
-if (!announced) {
-  chirpRecord = await requestJSON(new URL("/chirp/api", okOrigin), chirpKey, { method: "POST", body: chirpPayload,
-    headers: { "x-ok-agent-label": "Glideslope release publisher", "x-ok-agent-slug": "system/glideslope-release" } });
-}
-process.stdout.write(`${JSON.stringify({ ok: true, ...plan,
-  releasePublished: releasePublication.ok === true,
-  releaseStatus: releasePublication.publication?.status || null,
-  releasePublicationId: releasePublication.publication?.id || null,
-  chirpAnnounced: !announced,
-  chirpDeduplicated: announced, chirpRecordId: chirpRecord?.record?.id || chirpRecord?.id || null }, null, 2)}\n`);
+// Direct R2 mutation is retired. Keep the local validation/dry-run surface
+// useful while publication is frozen, then fail closed before any credential
+// lookup or remote write. Delete this gate only when the authenticated Nest
+// release-origin client owns archive-first/pointer-last publication and exact
+// public readback.
+throw new Error("Glideslope publication is frozen until the authenticated Nest release-origin client is installed; direct R2 writes are retired.");
 
 function validateManifest(value, expected) {
   if (value.schema !== "ok.product-update.v1" || value.appId !== "glideslope" || value.bundleId !== "com.owlandkestrel.glideslope"
@@ -189,43 +129,6 @@ function validatedOrigin(value) {
   const url = new URL(value); const loopback = ["127.0.0.1", "::1", "localhost"].includes(url.hostname);
   if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password) throw new Error("Origins must use HTTPS or loopback HTTP without credentials.");
   return url;
-}
-async function run(file, args) { await execFileAsync(file, args, { cwd: root, maxBuffer: 4 * 1024 * 1024 }); }
-async function wrangler(args) {
-  const executable = process.env.GLIDESLOPE_WRANGLER || "npx";
-  const prefix = executable === "npx" ? ["--yes", "wrangler"] : [];
-  await run(executable, [...prefix, ...args]);
-}
-async function r2Get(key, destination) {
-  try { await wrangler(["r2", "object", "get", `${bucket}/${key}`, "--file", destination, "--remote"]); return true; }
-  catch (error) {
-    const output = `${error.stderr || ""}\n${error.stdout || ""}`.replace(/\x1B\[[0-?]*[ -/]*[@-~]/gu, "");
-    if (/does not exist|not found|404|NoSuchKey/iu.test(output)) return false;
-    throw error;
-  }
-}
-async function r2Put(key, source, contentType, cacheControl) {
-  await wrangler(["r2", "object", "put", `${bucket}/${key}`, "--file", source, "--content-type", contentType, "--cache-control", cacheControl, "--remote"]);
-}
-async function publicRead(url, allow404) {
-  const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
-  if (allow404 && response.status === 404) return null;
-  if (!response.ok) throw new Error(`Public readback failed (${response.status}) for ${url.pathname}`);
-  return Buffer.from(await response.arrayBuffer());
-}
-async function requestJSON(url, token, options = {}) {
-  const response = await fetch(url, { method: options.method || "GET", headers: { accept: "application/json", authorization: `Bearer ${token}`,
-    ...(options.body ? { "content-type": "application/json" } : {}), ...options.headers }, body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: AbortSignal.timeout(30_000) });
-  const text = await response.text(); let parsed = {}; try { parsed = text ? JSON.parse(text) : {}; } catch {}
-  if (!response.ok) throw new Error(`${url.pathname} failed (${response.status}): ${parsed.error || response.statusText}`);
-  return parsed;
-}
-async function credential(valueName, fileName, defaultFile = "") {
-  const direct = String(process.env[valueName] || "").trim(); if (direct) return direct;
-  const file = String(process.env[fileName] || defaultFile).trim(); if (!file || !existsSync(file)) return "";
-  if (((await stat(file)).mode & 0o077) !== 0) throw new Error(`${fileName} must point to a mode-600 file.`);
-  return (await readFile(file, "utf8")).trim();
 }
 async function decodeAndVerifyManifest(document) {
   if (document.schema !== "ok.signed-manifest.v1") return { payload: document, signatureVerified: false };
